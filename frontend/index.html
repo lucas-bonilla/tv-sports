@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0d1117" />
+  <meta name="description" content="Programación deportiva en TV" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="style.css" />
+  <title>📺 Sports TV</title>
+</head>
+<body>
+  <header>
+    <h1>📺 Sports TV</h1>
+    <div id="date-label" class="date-label">Cargando...</div>
+    <button id="refresh-btn" class="refresh-btn" title="Actualizar">↻</button>
+  </header>
+
+  <div id="filter-bar" class="filter-bar"></div>
+
+  <main id="events-container">
+    <div class="spinner"></div>
+  </main>
+
+  <div id="last-updated" class="last-updated"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
