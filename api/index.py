@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from scraper import scrape_events
+from _scraper import scrape_events
 import logging
 
 logging.basicConfig(level=logging.INFO)
