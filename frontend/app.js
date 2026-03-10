@@ -1,4 +1,4 @@
-const API_URL = "http://localhost:8000/events";
+const API_URL = "/api/events";
 
 let allEvents = [];
 let activeFilter = "Todos";
