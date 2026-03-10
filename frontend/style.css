@@ -97,6 +97,31 @@ header h1 {
   border-color: var(--accent);
   color: #fff;
 }
+.filter-chip[draggable] {
+  cursor: grab;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.filter-chip.dragging {
+  opacity: 0.4;
+}
+.filter-chip.drag-over {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.3);
+}
+.drag-clone {
+  position: fixed;
+  z-index: 999;
+  pointer-events: none;
+  opacity: 0.85;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
 
 /* Sport group */
 main {
