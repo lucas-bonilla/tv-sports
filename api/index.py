@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from mangum import Mangum
-from api.scraper import scrape_events
+from scraper import scrape_events
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +30,3 @@ def get_events():
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
-
-
-handler = Mangum(app)
