@@ -456,8 +456,7 @@ function calendarLinks(event, start) {
   const title = encodeURIComponent(event.match || event.sport);
   const details = encodeURIComponent([event.competition, event.channel].filter(Boolean).join(" · "));
   const google = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${fmt(start)}/${fmt(end)}&details=${details}`;
-  const outlook = `https://outlook.live.com/calendar/0/deeplink/compose?subject=${title}&startdt=${start.toISOString()}&enddt=${end.toISOString()}&body=${details}`;
-  return { google, outlook };
+  return { google };
 }
 
 function openCalendarModal(event) {
@@ -476,7 +475,6 @@ function openCalendarModal(event) {
     ? `<button class="cal-modal-btn" id="cal-add-btn">Añadir al calendario</button>`
     : `<div class="cal-modal-options">
         <a class="cal-modal-btn cal-modal-btn--outline" href="${links.google}" target="_blank" rel="noopener">Google Calendar</a>
-        <a class="cal-modal-btn cal-modal-btn--outline" href="${links.outlook}" target="_blank" rel="noopener">Outlook</a>
         <button class="cal-modal-btn cal-modal-btn--ghost" id="cal-add-btn">⬇ Descargar .ics</button>
       </div>`)
     : `<div class="cal-modal-error">No se pudo determinar la fecha del evento.</div>`;
