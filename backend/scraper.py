@@ -75,26 +75,34 @@ def scrape_events() -> dict:
     today_day = now.day
 
     events = []
-    seen_dates = set()
     today_date_str = None
 
-    for day_block in soup.select("li.content-item"):
+    # The daylist carousel has correctly split per-day blocks — use those as the source of truth.
+    # The non-daylist block labeled "today" is a full-week dump and must be skipped.
+    for day_block in soup.select("ol.daylist li.content-item"):
         label = day_block.select_one("span.title-section-widget")
         if not label or not day_block.select("li.dailyevent"):
             continue
-
         date_str = _format_label(label)
-
-        # Skip if we already collected this date (avoids the daylist duplicate for today)
-        if date_str in seen_dates:
-            continue
-        seen_dates.add(date_str)
-
         day_events = _parse_events(day_block, date_str)
         events.extend(day_events)
-
         if f"{today_day} de" in label.get_text(strip=True) and today_date_str is None:
             today_date_str = date_str
+
+    # If today is not in daylist (edge case), fall back to the main block
+    if today_date_str is None:
+        for day_block in soup.select("li.content-item"):
+            if day_block.parent and "daylist" in (day_block.parent.get("class") or []):
+                continue
+            label = day_block.select_one("span.title-section-widget")
+            if not label or not day_block.select("li.dailyevent"):
+                continue
+            if f"{today_day} de" not in label.get_text(strip=True):
+                continue
+            date_str = _format_label(label)
+            events.extend(_parse_events(day_block, date_str))
+            today_date_str = date_str
+            break
 
     return {
         "date": today_date_str or (events[0]["date"] if events else ""),
