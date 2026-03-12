@@ -38,17 +38,9 @@ def get_sport_emoji(icon_class: str) -> str:
     return "🏅"
 
 
-def scrape_events() -> dict:
-    response = requests.get(MARCA_URL, headers=HEADERS, timeout=10)
-    response.raise_for_status()
-
-    soup = BeautifulSoup(response.text, "html.parser")
-
-    date_span = soup.select_one("span.title-section-widget")
-    date_str = date_span.get_text(strip=True) if date_span else datetime.now().strftime("%A %d de %B de %Y")
-
+def _parse_events(day_block) -> list:
     events = []
-    for li in soup.select("li.dailyevent"):
+    for li in day_block.select("li.dailyevent"):
         sport_icon_el = li.select_one("i[class*='icon-']")
         icon_class = sport_icon_el["class"][0] if sport_icon_el else ""
 
@@ -61,6 +53,42 @@ def scrape_events() -> dict:
             "emoji": get_sport_emoji(icon_class),
         }
         events.append(event)
+    return events
+
+
+def scrape_events() -> dict:
+    response = requests.get(MARCA_URL, headers=HEADERS, timeout=10)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    now = datetime.now()
+    today_pattern = f"{now.day} de"  # e.g. "12 de" — matches day number regardless of locale
+
+    events = []
+    date_str = None
+
+    for day_block in soup.select("li.content-item"):
+        label = day_block.select_one("span.title-section-widget")
+        if not label:
+            continue
+        label_text = label.get_text(strip=True)
+        if today_pattern in label_text:
+            if date_str is None:
+                strong = label.find("strong")
+                rest = label.get_text(strip=True).replace(strong.get_text(strip=True), "").strip() if strong else label_text
+                day_name = strong.get_text(strip=True) if strong else ""
+                date_str = f"{day_name} {rest}".strip()
+
+            events.extend(_parse_events(day_block))
+
+    if date_str is None:
+        # Fallback: use the first day block
+        first = soup.select_one("li.content-item span.title-section-widget")
+        date_str = first.get_text(strip=True) if first else datetime.now().strftime("%A %d de %B de %Y")
+        first_block = soup.select_one("li.content-item")
+        if first_block:
+            events = _parse_events(first_block)
 
     return {
         "date": date_str,
