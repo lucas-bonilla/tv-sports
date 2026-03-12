@@ -3,7 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
+import asyncio
 import logging
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -121,6 +123,13 @@ def scrape_events() -> dict:
     }
 
 
+# --- In-memory cache ---
+
+_cache: dict = {"data": None, "ts": 0.0}
+_cache_lock = asyncio.Lock()
+CACHE_TTL = 900  # 15 minutes
+
+
 # --- FastAPI app ---
 
 app = FastAPI(title="TV Sports API", version="1.0.0")
@@ -134,14 +143,27 @@ app.add_middleware(
 
 
 @app.get("/api/events")
-def get_events():
-    try:
-        data = scrape_events()
-        logger.info(f"Scraped {len(data['events'])} events for {data['date']}")
-        return data
-    except Exception as e:
-        logger.error(f"Scrape failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+async def get_events():
+    now = time.time()
+    if _cache["data"] and (now - _cache["ts"]) < CACHE_TTL:
+        return _cache["data"]
+    async with _cache_lock:
+        # Re-check after acquiring lock — another request may have populated it
+        now = time.time()
+        if _cache["data"] and (now - _cache["ts"]) < CACHE_TTL:
+            return _cache["data"]
+        try:
+            data = await asyncio.to_thread(scrape_events)
+            _cache["data"] = data
+            _cache["ts"] = now
+            logger.info(f"Scraped {len(data['events'])} events for {data['date']}")
+            return data
+        except Exception as e:
+            logger.error(f"Scrape failed: {e}")
+            if _cache["data"]:
+                logger.warning("Returning stale cache after scrape failure")
+                return _cache["data"]
+            raise HTTPException(status_code=500, detail="Failed to fetch schedule. Try again later.")
 
 
 @app.get("/api/health")

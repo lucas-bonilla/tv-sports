@@ -5,7 +5,7 @@ const STORAGE_KEY = "sports-tv-filter-order";
 
 let allEvents = [];
 let activeFilter = "Todos";
-let activeDateFilter = "Hoy";
+let activeDateFilter = null; // null = not yet set (defaults to today on first load)
 
 function getSavedOrder() {
   try {
@@ -49,17 +49,29 @@ async function fetchEvents() {
 
   try {
     const res = await fetch(API_URL);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const isOffline = res.status === 503;
+    if (!res.ok && !isOffline) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+
+    if (isOffline && (!data.events || data.events.length === 0)) {
+      container.innerHTML = '<div class="error-msg">Sin conexión y sin datos guardados.</div>';
+      return;
+    }
 
     allEvents = data.events;
     document.getElementById("date-label").textContent = data.date;
-    document.getElementById("last-updated").textContent =
-      `Actualizado: ${new Date(data.scraped_at).toLocaleTimeString("es-ES")}`;
+    document.getElementById("last-updated").textContent = isOffline
+      ? `Sin conexión — mostrando programación guardada (${new Date(data.scraped_at).toLocaleTimeString("es-ES")})`
+      : `Actualizado: ${new Date(data.scraped_at).toLocaleTimeString("es-ES")}`;
+
+    // Default to today's date on first load only
+    if (activeDateFilter === null && data.date) {
+      activeDateFilter = data.date;
+    }
 
     buildDateFilters(allEvents, data.date);
     buildFilters(allEvents);
-    renderEvents(allEvents, activeFilter, activeDateFilter);
+    renderEvents(allEvents, activeFilter);
   } catch (err) {
     container.innerHTML = `<div class="error-msg">\u274C Error al cargar datos.<br/><small>${err.message}</small></div>`;
   } finally {
@@ -209,16 +221,17 @@ function buildDateFilters(events, todayDate) {
 
   const all = [{ label: "Todos", value: "Todos" }, ...labels];
 
-  bar.innerHTML = all.map(({ label, value }) =>
-    `<button class="filter-chip ${label === activeDateFilter ? "active" : ""}" data-date="${value}">${label}</button>`
-  ).join("");
+  bar.innerHTML = all.map(({ label, value }) => {
+    const isActive = value === activeDateFilter || (activeDateFilter === null && value === "Todos");
+    return `<button class="filter-chip ${isActive ? "active" : ""}" data-date="${value}">${label}</button>`;
+  }).join("");
 
   bar.querySelectorAll(".filter-chip").forEach(btn => {
     btn.addEventListener("click", () => {
-      activeDateFilter = btn.textContent.trim();
+      activeDateFilter = btn.dataset.date; // store the value, not the label
       bar.querySelectorAll(".filter-chip").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
-      renderEvents(allEvents, activeFilter, activeDateFilter);
+      renderEvents(allEvents, activeFilter);
     });
   });
 }
@@ -307,14 +320,11 @@ function renderSportGroups(events) {
 function renderEvents(events, sportFilter) {
   const container = document.getElementById("events-container");
 
-  // Resolve date filter value from label back to actual date string
-  const dateBar = document.getElementById("date-bar");
-  const activeDateBtn = dateBar.querySelector(".filter-chip.active");
-  const activeDateValue = activeDateBtn ? activeDateBtn.dataset.date : "Todos";
+  const dateValue = activeDateFilter; // null or "Todos" = show all
 
   let filtered = sportFilter === "Todos" ? events : events.filter(e => e.sport === sportFilter);
-  if (activeDateValue !== "Todos") {
-    filtered = filtered.filter(e => e.date === activeDateValue);
+  if (dateValue && dateValue !== "Todos") {
+    filtered = filtered.filter(e => e.date === dateValue);
   }
 
   if (filtered.length === 0) {
@@ -322,7 +332,7 @@ function renderEvents(events, sportFilter) {
     return;
   }
 
-  if (activeDateValue === "Todos") {
+  if (!dateValue || dateValue === "Todos") {
     // Group by day, then by sport within each day
     const days = [...new Set(events.map(e => e.date))];
     container.innerHTML = days.map(date => {
