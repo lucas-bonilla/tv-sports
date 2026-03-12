@@ -436,6 +436,12 @@ main {
   margin-bottom: 1.25rem;
 }
 
+.cal-modal-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
 .cal-modal-btn {
   display: block;
   width: 100%;
@@ -447,9 +453,26 @@ main {
   font-size: 0.95rem;
   font-weight: 600;
   cursor: pointer;
+  text-align: center;
+  text-decoration: none;
   transition: opacity 0.15s;
 }
 .cal-modal-btn:hover { opacity: 0.88; }
+
+.cal-modal-btn--outline {
+  background: none;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+.cal-modal-btn--outline:hover { background: rgba(88, 166, 255, 0.1); opacity: 1; }
+
+.cal-modal-btn--ghost {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.cal-modal-btn--ghost:hover { border-color: var(--text); color: var(--text); opacity: 1; }
 
 .cal-modal-error {
   text-align: center;

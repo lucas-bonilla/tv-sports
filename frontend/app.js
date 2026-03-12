@@ -448,6 +448,18 @@ function buildICS(event) {
   ].join("\r\n");
 }
 
+function calendarLinks(event, start) {
+  const pad = n => String(n).padStart(2, "0");
+  const fmt = d =>
+    `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
+  const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+  const title = encodeURIComponent(event.match || event.sport);
+  const details = encodeURIComponent([event.competition, event.channel].filter(Boolean).join(" · "));
+  const google = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${fmt(start)}/${fmt(end)}&details=${details}`;
+  const outlook = `https://outlook.live.com/calendar/0/deeplink/compose?subject=${title}&startdt=${start.toISOString()}&enddt=${end.toISOString()}&body=${details}`;
+  return { google, outlook };
+}
+
 function openCalendarModal(event) {
   const existing = document.getElementById("cal-modal");
   if (existing) existing.remove();
@@ -457,6 +469,17 @@ function openCalendarModal(event) {
   const timeLabel = start
     ? start.toLocaleString("es-ES", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })
     : `${event.date} ${event.time}`;
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  const links = start ? calendarLinks(event, start) : null;
+
+  const calButtons = ics ? (isIOS
+    ? `<button class="cal-modal-btn" id="cal-add-btn">Añadir al calendario</button>`
+    : `<div class="cal-modal-options">
+        <a class="cal-modal-btn cal-modal-btn--outline" href="${links.google}" target="_blank" rel="noopener">Google Calendar</a>
+        <a class="cal-modal-btn cal-modal-btn--outline" href="${links.outlook}" target="_blank" rel="noopener">Outlook</a>
+        <button class="cal-modal-btn cal-modal-btn--ghost" id="cal-add-btn">⬇ Descargar .ics</button>
+      </div>`)
+    : `<div class="cal-modal-error">No se pudo determinar la fecha del evento.</div>`;
 
   const modal = document.createElement("div");
   modal.id = "cal-modal";
@@ -468,10 +491,7 @@ function openCalendarModal(event) {
       <div class="cal-modal-match">${event.match}</div>
       <div class="cal-modal-meta">${event.competition ? `<span class="event-competition">${event.competition}</span>` : ""} ${event.channel || ""}</div>
       <div class="cal-modal-time">📅 ${timeLabel}</div>
-      ${ics
-        ? `<button class="cal-modal-btn" id="cal-add-btn">Añadir al calendario</button>`
-        : `<div class="cal-modal-error">No se pudo determinar la fecha del evento.</div>`
-      }
+      ${calButtons}
     </div>`;
 
   document.body.appendChild(modal);
@@ -479,13 +499,11 @@ function openCalendarModal(event) {
   modal.querySelector(".cal-modal-close").addEventListener("click", () => modal.remove());
   modal.addEventListener("click", e => { if (e.target === modal) modal.remove(); });
 
-  if (ics) {
-    modal.querySelector("#cal-add-btn").addEventListener("click", () => {
-      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  const addBtn = modal.querySelector("#cal-add-btn");
+  if (addBtn) {
+    addBtn.addEventListener("click", () => {
       const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
-
       if (isIOS) {
-        // iOS Safari opens a data: URL with text/calendar and prompts "Add to Calendar"
         const reader = new FileReader();
         reader.onload = () => {
           const a = document.createElement("a");
