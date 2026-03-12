@@ -143,6 +143,7 @@ main {
 .sport-group-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.5rem;
   padding: 0.65rem 1rem;
   background: var(--sport-bg);
@@ -151,6 +152,22 @@ main {
   letter-spacing: 0.03em;
   text-transform: uppercase;
   color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.chevron {
+  font-size: 1rem;
+  color: var(--muted);
+  transition: transform 0.2s;
+  transform: rotate(90deg);
+}
+.sport-group.collapsed .chevron {
+  transform: rotate(0deg);
+}
+.sport-group.collapsed .sport-group-body {
+  display: none;
 }
 
 .event-card {
@@ -247,6 +264,76 @@ main {
   padding: 2rem;
   font-size: 0.9rem;
 }
+
+/* Quick-nav FAB */
+.quick-nav-btn {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.25rem;
+  width: 44px;
+  height: 44px;
+  background: var(--accent);
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 1.1rem;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s;
+}
+.quick-nav-btn:hover { transform: scale(1.08); }
+
+.quick-nav-panel {
+  position: fixed;
+  bottom: 5.5rem;
+  right: 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.4rem 0;
+  z-index: 20;
+  min-width: 170px;
+  max-height: 60vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  display: none;
+}
+.quick-nav-panel.open { display: block; }
+.quick-nav-item {
+  padding: 0.6rem 1rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text);
+  white-space: nowrap;
+}
+.quick-nav-item:hover { background: rgba(88, 166, 255, 0.1); color: var(--accent); }
+
+/* Back to top */
+.back-to-top {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 1.25rem;
+  width: 44px;
+  height: 44px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 1.1rem;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 20;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, border-color 0.15s;
+}
+.back-to-top.visible { display: flex; }
+.back-to-top:hover { color: var(--accent); border-color: var(--accent); }
 
 /* Date bar */
 .date-bar {

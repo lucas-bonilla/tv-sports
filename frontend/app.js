@@ -261,6 +261,10 @@ function buildFilters(events) {
   });
 }
 
+function sportId(sport) {
+  return "sport-" + sport.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+}
+
 function renderSportGroups(events) {
   const bar = document.getElementById("filter-bar");
   const chipOrder = [...bar.querySelectorAll(".filter-chip[draggable]")].map(c => c.dataset.sport);
@@ -277,20 +281,25 @@ function renderSportGroups(events) {
   return orderedSports.map(sport => {
     const items = grouped[sport];
     return `
-    <div class="sport-group">
-      <div class="sport-group-header">${items[0].emoji} ${sport}</div>
-      ${items.map(e => `
-        <div class="event-card">
-          <div class="event-time">${e.time}</div>
-          <div class="event-body">
-            <div class="event-match">${e.match}</div>
-            <div class="event-meta">
-              <span class="event-competition">${e.competition}</span>
-              <span class="event-channel">${e.channel}</span>
+    <div class="sport-group" id="${sportId(sport)}">
+      <div class="sport-group-header" data-toggle>
+        <span>${items[0].emoji} ${sport}</span>
+        <span class="chevron">›</span>
+      </div>
+      <div class="sport-group-body">
+        ${items.map(e => `
+          <div class="event-card">
+            <div class="event-time">${e.time}</div>
+            <div class="event-body">
+              <div class="event-match">${e.match}</div>
+              <div class="event-meta">
+                <span class="event-competition">${e.competition}</span>
+                <span class="event-channel">${e.channel}</span>
+              </div>
             </div>
           </div>
-        </div>
-      `).join("")}
+        `).join("")}
+      </div>
     </div>`;
   }).join("");
 }
@@ -328,9 +337,55 @@ function renderEvents(events, sportFilter) {
   } else {
     container.innerHTML = renderSportGroups(filtered);
   }
+
+  // Collapse toggle
+  container.onclick = e => {
+    const header = e.target.closest(".sport-group-header[data-toggle]");
+    if (!header) return;
+    header.closest(".sport-group").classList.toggle("collapsed");
+  };
+
+  buildQuickNav();
+}
+
+function buildQuickNav() {
+  const panel = document.getElementById("quick-nav-panel");
+  const groups = [...document.querySelectorAll(".sport-group")];
+  if (groups.length <= 1) {
+    panel.innerHTML = "";
+    return;
+  }
+  panel.innerHTML = groups.map(g => {
+    const header = g.querySelector(".sport-group-header span");
+    return `<div class="quick-nav-item" data-target="${g.id}">${header ? header.textContent : g.id}</div>`;
+  }).join("");
+
+  panel.querySelectorAll(".quick-nav-item").forEach(item => {
+    item.addEventListener("click", () => {
+      const target = document.getElementById(item.dataset.target);
+      if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+      panel.classList.remove("open");
+    });
+  });
 }
 
 document.getElementById("refresh-btn").addEventListener("click", fetchEvents);
+
+// Quick-nav FAB
+const quickNavBtn = document.getElementById("quick-nav-btn");
+const quickNavPanel = document.getElementById("quick-nav-panel");
+quickNavBtn.addEventListener("click", e => {
+  e.stopPropagation();
+  quickNavPanel.classList.toggle("open");
+});
+document.addEventListener("click", () => quickNavPanel.classList.remove("open"));
+
+// Back to top
+const backToTop = document.getElementById("back-to-top");
+window.addEventListener("scroll", () => {
+  backToTop.classList.toggle("visible", window.scrollY > 300);
+}, { passive: true });
+backToTop.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
 
 // Register service worker for PWA
 if ("serviceWorker" in navigator) {
