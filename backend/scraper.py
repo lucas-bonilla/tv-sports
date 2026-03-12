@@ -69,6 +69,9 @@ def scrape_events() -> dict:
     date_str = None
 
     for day_block in soup.select("li.content-item"):
+        # Skip duplicate blocks rendered inside the auto-items daylist carousel
+        if day_block.parent and "daylist" in (day_block.parent.get("class") or []):
+            continue
         label = day_block.select_one("span.title-section-widget")
         if not label:
             continue

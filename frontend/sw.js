@@ -1,4 +1,4 @@
-const CACHE = "sports-tv-v2";
+const CACHE = "sports-tv-v3";
 const STATIC = ["/", "/index.html", "/style.css", "/app.js", "/manifest.json"];
 
 self.addEventListener("install", e => {
