@@ -480,24 +480,27 @@ function openCalendarModal(event) {
   modal.addEventListener("click", e => { if (e.target === modal) modal.remove(); });
 
   if (ics) {
-    modal.querySelector("#cal-add-btn").addEventListener("click", async () => {
-      const blob = new Blob([ics], { type: "text/calendar" });
-      const file = new File([blob], "evento.ics", { type: "text/calendar" });
+    modal.querySelector("#cal-add-btn").addEventListener("click", () => {
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+      const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
 
-      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-        try {
-          await navigator.share({ files: [file], title: event.match });
-          modal.remove();
-          return;
-        } catch { /* fallthrough to download */ }
+      if (isIOS) {
+        // iOS Safari opens a data: URL with text/calendar and prompts "Add to Calendar"
+        const reader = new FileReader();
+        reader.onload = () => {
+          const a = document.createElement("a");
+          a.href = reader.result;
+          a.click();
+        };
+        reader.readAsDataURL(blob);
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "evento.ics";
+        a.click();
+        URL.revokeObjectURL(url);
       }
-
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "evento.ics";
-      a.click();
-      URL.revokeObjectURL(url);
       modal.remove();
     });
   }
