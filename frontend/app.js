@@ -350,20 +350,38 @@ function renderEvents(events, sportFilter) {
 
 function buildQuickNav() {
   const panel = document.getElementById("quick-nav-panel");
-  const groups = [...document.querySelectorAll(".sport-group")];
-  if (groups.length <= 1) {
+
+  const daySections = [...document.querySelectorAll(".day-section")];
+  const sportGroups = [...document.querySelectorAll(".sport-group")];
+
+  let items = [];
+
+  if (daySections.length > 0) {
+    // "Todos" mode: navigate by day
+    daySections.forEach(section => {
+      const header = section.querySelector(".day-header");
+      if (header) items.push({ label: header.textContent.trim(), el: section });
+    });
+  } else {
+    // Single day: navigate by sport
+    sportGroups.forEach(g => {
+      const span = g.querySelector(".sport-group-header span");
+      if (span) items.push({ label: span.textContent.trim(), el: g });
+    });
+  }
+
+  if (items.length <= 1) {
     panel.innerHTML = "";
     return;
   }
-  panel.innerHTML = groups.map(g => {
-    const header = g.querySelector(".sport-group-header span");
-    return `<div class="quick-nav-item" data-target="${g.id}">${header ? header.textContent : g.id}</div>`;
-  }).join("");
 
-  panel.querySelectorAll(".quick-nav-item").forEach(item => {
-    item.addEventListener("click", () => {
-      const target = document.getElementById(item.dataset.target);
-      if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  panel.innerHTML = items.map((item, i) =>
+    `<div class="quick-nav-item" data-idx="${i}">${item.label}</div>`
+  ).join("");
+
+  panel.querySelectorAll(".quick-nav-item").forEach(btn => {
+    btn.addEventListener("click", () => {
+      items[+btn.dataset.idx].el.scrollIntoView({ behavior: "smooth", block: "start" });
       panel.classList.remove("open");
     });
   });
