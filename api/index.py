@@ -21,21 +21,21 @@ HEADERS = {
 }
 
 SPORT_EMOJIS = {
-    "baloncesto": "\U0001F3C0",
-    "futbol": "\u26BD",
-    "tenis": "\U0001F3BE",
-    "ciclismo": "\U0001F6B4",
-    "atletismo": "\U0001F3C3",
-    "natacion": "\U0001F3CA",
-    "motor": "\U0001F3CE\uFE0F",
-    "rugby": "\U0001F3C9",
-    "balonmano": "\U0001F93E",
-    "golf": "\u26F3",
-    "boxeo": "\U0001F94A",
-    "triatlon": "\U0001F3CB\uFE0F",
-    "voleibol": "\U0001F3D0",
-    "padel": "\U0001F3BE",
-    "hockey": "\U0001F3D1",
+    "baloncesto": "🏀",
+    "futbol": "⚽",
+    "tenis": "🎾",
+    "ciclismo": "🚴",
+    "atletismo": "🏃",
+    "natacion": "🏊",
+    "motor": "🏎️",
+    "rugby": "🏉",
+    "balonmano": "🤾",
+    "golf": "⛳",
+    "boxeo": "🥊",
+    "triatlon": "🏋️",
+    "voleibol": "🏐",
+    "padel": "🎾",
+    "hockey": "🏑",
 }
 
 
@@ -43,24 +43,25 @@ def get_sport_emoji(icon_class: str) -> str:
     for key, emoji in SPORT_EMOJIS.items():
         if key in icon_class.lower():
             return emoji
-    return "\U0001F3C5"
+    return "🏅"
 
 
-def scrape_events() -> dict:
-    response = requests.get(MARCA_URL, headers=HEADERS, timeout=10)
-    response.raise_for_status()
+def _format_label(label) -> str:
+    strong = label.find("strong")
+    if strong:
+        rest = label.get_text(strip=True).replace(strong.get_text(strip=True), "").strip()
+        return f"{strong.get_text(strip=True)} {rest}".strip()
+    return label.get_text(strip=True)
 
-    soup = BeautifulSoup(response.text, "html.parser")
 
-    date_span = soup.select_one("span.title-section-widget")
-    date_str = date_span.get_text(strip=True) if date_span else datetime.now().strftime("%A %d de %B de %Y")
-
+def _parse_events(day_block, date_str: str) -> list:
     events = []
-    for li in soup.select("li.dailyevent"):
+    for li in day_block.select("li.dailyevent"):
         sport_icon_el = li.select_one("i[class*='icon-']")
         icon_class = sport_icon_el["class"][0] if sport_icon_el else ""
 
         event = {
+            "date": date_str,
             "sport": li.select_one(".dailyday").get_text(strip=True) if li.select_one(".dailyday") else "",
             "time": li.select_one(".dailyhour").get_text(strip=True) if li.select_one(".dailyhour") else "",
             "competition": li.select_one(".dailycompetition").get_text(strip=True) if li.select_one(".dailycompetition") else "",
@@ -69,9 +70,42 @@ def scrape_events() -> dict:
             "emoji": get_sport_emoji(icon_class),
         }
         events.append(event)
+    return events
+
+
+def scrape_events() -> dict:
+    response = requests.get(MARCA_URL, headers=HEADERS, timeout=10)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    now = datetime.now()
+    today_day = now.day
+
+    events = []
+    seen_dates = set()
+    today_date_str = None
+
+    for day_block in soup.select("li.content-item"):
+        label = day_block.select_one("span.title-section-widget")
+        if not label or not day_block.select("li.dailyevent"):
+            continue
+
+        date_str = _format_label(label)
+
+        # Skip if we already collected this date (avoids the daylist duplicate for today)
+        if date_str in seen_dates:
+            continue
+        seen_dates.add(date_str)
+
+        day_events = _parse_events(day_block, date_str)
+        events.extend(day_events)
+
+        if f"{today_day} de" in label.get_text(strip=True) and today_date_str is None:
+            today_date_str = date_str
 
     return {
-        "date": date_str,
+        "date": today_date_str or (events[0]["date"] if events else ""),
         "events": events,
         "scraped_at": datetime.now().isoformat(),
     }
