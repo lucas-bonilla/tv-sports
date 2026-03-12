@@ -1,0 +1,46 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- Server-side in-memory cache with 15-minute TTL and stale fallback on scrape failure
+- Service worker now caches API responses and serves them offline (503 with cached data and a clear user message)
+- SW static cache key changed from `Date.now()` to a deterministic version string to prevent unnecessary cache busting
+- Race condition protection in Python cache under concurrent requests (asyncio.Lock with double-check pattern)
+
+### Fixed
+- Fire-and-forget SW cache writes are now awaited with proper error handling
+- `activeDateFilter` now uses `null` for "not yet set" so a page refresh no longer overrides an explicit "Todos" selection
+
+## [1.2.0] - 2026-03-12
+
+### Added
+- Date filter bar to navigate between days; "Todos" view groups events by day
+- Collapsible sport groups with chevron toggle
+- Quick-nav FAB: navigates by day in multi-day view, by sport in single-day view
+- Back-to-top button
+- Service worker cache auto-invalidation (replaces manual version bumps)
+
+### Fixed
+- Wrong date parsing: marca.com day-name label had no space before the day number
+- Today's events were showing the full week instead of just today (daylist-first HTML parsing)
+- Duplicate events caused by the full-week dump block being parsed alongside per-day blocks
+- `activeDateFilter` was storing the display label instead of the value, breaking the "Hoy" active state
+
+## [1.1.0] - 2026-03-10
+
+### Added
+- Drag-to-reorder sport filter chips on both desktop (mouse) and mobile (touch)
+- Filter chip order persisted to localStorage across sessions
+
+## [1.0.0] - 2026-03-10
+
+### Added
+- Initial Vercel deployment
+- FastAPI backend scraping sport events from marca.com
+- Vanilla JS/CSS/HTML progressive web app (PWA)

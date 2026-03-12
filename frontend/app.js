@@ -301,7 +301,7 @@ function renderSportGroups(events) {
       </div>
       <div class="sport-group-body">
         ${items.map(e => `
-          <div class="event-card">
+          <div class="event-card" data-event="${encodeURIComponent(JSON.stringify(e))}">
             <div class="event-time">${e.time}</div>
             <div class="event-body">
               <div class="event-match">${e.match}</div>
@@ -396,6 +396,120 @@ function buildQuickNav() {
     });
   });
 }
+
+// --- Calendar modal ---
+
+const MONTHS_ES = {
+  "enero": 0, "febrero": 1, "marzo": 2, "abril": 3, "mayo": 4, "junio": 5,
+  "julio": 6, "agosto": 7, "septiembre": 8, "octubre": 9, "noviembre": 10, "diciembre": 11
+};
+
+function parseEventDate(dateStr, timeStr) {
+  // dateStr: "Jueves 13 de Marzo" — extract day number and month name
+  // timeStr: "20:30"
+  const parts = dateStr.toLowerCase().split(" ");
+  const day = parseInt(parts[1] || parts[0], 10);
+  const monthName = parts[3] || parts[2] || "";
+  const month = MONTHS_ES[monthName];
+  if (isNaN(day) || month === undefined) return null;
+
+  const [hours, minutes] = (timeStr || "00:00").split(":").map(Number);
+  const year = new Date().getFullYear();
+  const d = new Date(year, month, day, hours, minutes, 0);
+  // If the date is in the past by more than a month, assume next year
+  if (d < new Date() - 30 * 24 * 3600 * 1000) d.setFullYear(year + 1);
+  return d;
+}
+
+function toICSDate(d) {
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}00`;
+}
+
+function buildICS(event) {
+  const start = parseEventDate(event.date, event.time);
+  if (!start) return null;
+  const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+  const uid = `${Date.now()}@sports-tv`;
+  const summary = event.match || event.sport;
+  const description = [event.competition, event.channel].filter(Boolean).join(" · ");
+  return [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Sports TV//ES",
+    "BEGIN:VEVENT",
+    `UID:${uid}`,
+    `DTSTART:${toICSDate(start)}`,
+    `DTEND:${toICSDate(end)}`,
+    `SUMMARY:${summary}`,
+    `DESCRIPTION:${description}`,
+    "END:VEVENT",
+    "END:VCALENDAR"
+  ].join("\r\n");
+}
+
+function openCalendarModal(event) {
+  const existing = document.getElementById("cal-modal");
+  if (existing) existing.remove();
+
+  const ics = buildICS(event);
+  const start = parseEventDate(event.date, event.time);
+  const timeLabel = start
+    ? start.toLocaleString("es-ES", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })
+    : `${event.date} ${event.time}`;
+
+  const modal = document.createElement("div");
+  modal.id = "cal-modal";
+  modal.className = "cal-modal-overlay";
+  modal.innerHTML = `
+    <div class="cal-modal-sheet">
+      <button class="cal-modal-close" aria-label="Cerrar">✕</button>
+      <div class="cal-modal-emoji">${event.emoji}</div>
+      <div class="cal-modal-match">${event.match}</div>
+      <div class="cal-modal-meta">${event.competition ? `<span class="event-competition">${event.competition}</span>` : ""} ${event.channel || ""}</div>
+      <div class="cal-modal-time">📅 ${timeLabel}</div>
+      ${ics
+        ? `<button class="cal-modal-btn" id="cal-add-btn">Añadir al calendario</button>`
+        : `<div class="cal-modal-error">No se pudo determinar la fecha del evento.</div>`
+      }
+    </div>`;
+
+  document.body.appendChild(modal);
+
+  modal.querySelector(".cal-modal-close").addEventListener("click", () => modal.remove());
+  modal.addEventListener("click", e => { if (e.target === modal) modal.remove(); });
+
+  if (ics) {
+    modal.querySelector("#cal-add-btn").addEventListener("click", async () => {
+      const blob = new Blob([ics], { type: "text/calendar" });
+      const file = new File([blob], "evento.ics", { type: "text/calendar" });
+
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file], title: event.match });
+          modal.remove();
+          return;
+        } catch { /* fallthrough to download */ }
+      }
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "evento.ics";
+      a.click();
+      URL.revokeObjectURL(url);
+      modal.remove();
+    });
+  }
+}
+
+// Card click → calendar modal
+document.getElementById("events-container").addEventListener("click", e => {
+  const card = e.target.closest(".event-card[data-event]");
+  if (!card) return;
+  const event = JSON.parse(decodeURIComponent(card.dataset.event));
+  openCalendarModal(event);
+});
 
 document.getElementById("refresh-btn").addEventListener("click", fetchEvents);
 
