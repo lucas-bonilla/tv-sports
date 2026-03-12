@@ -38,13 +38,22 @@ def get_sport_emoji(icon_class: str) -> str:
     return "🏅"
 
 
-def _parse_events(day_block) -> list:
+def _format_label(label) -> str:
+    strong = label.find("strong")
+    if strong:
+        rest = label.get_text(strip=True).replace(strong.get_text(strip=True), "").strip()
+        return f"{strong.get_text(strip=True)} {rest}".strip()
+    return label.get_text(strip=True)
+
+
+def _parse_events(day_block, date_str: str) -> list:
     events = []
     for li in day_block.select("li.dailyevent"):
         sport_icon_el = li.select_one("i[class*='icon-']")
         icon_class = sport_icon_el["class"][0] if sport_icon_el else ""
 
         event = {
+            "date": date_str,
             "sport": li.select_one(".dailyday").get_text(strip=True) if li.select_one(".dailyday") else "",
             "time": li.select_one(".dailyhour").get_text(strip=True) if li.select_one(".dailyhour") else "",
             "competition": li.select_one(".dailycompetition").get_text(strip=True) if li.select_one(".dailycompetition") else "",
@@ -63,38 +72,32 @@ def scrape_events() -> dict:
     soup = BeautifulSoup(response.text, "html.parser")
 
     now = datetime.now()
-    today_pattern = f"{now.day} de"  # e.g. "12 de" — matches day number regardless of locale
+    today_day = now.day
 
     events = []
-    date_str = None
+    seen_dates = set()
+    today_date_str = None
 
     for day_block in soup.select("li.content-item"):
-        # Skip duplicate blocks rendered inside the auto-items daylist carousel
-        if day_block.parent and "daylist" in (day_block.parent.get("class") or []):
-            continue
         label = day_block.select_one("span.title-section-widget")
-        if not label:
+        if not label or not day_block.select("li.dailyevent"):
             continue
-        label_text = label.get_text(strip=True)
-        if today_pattern in label_text:
-            if date_str is None:
-                strong = label.find("strong")
-                rest = label.get_text(strip=True).replace(strong.get_text(strip=True), "").strip() if strong else label_text
-                day_name = strong.get_text(strip=True) if strong else ""
-                date_str = f"{day_name} {rest}".strip()
 
-            events.extend(_parse_events(day_block))
+        date_str = _format_label(label)
 
-    if date_str is None:
-        # Fallback: use the first day block
-        first = soup.select_one("li.content-item span.title-section-widget")
-        date_str = first.get_text(strip=True) if first else datetime.now().strftime("%A %d de %B de %Y")
-        first_block = soup.select_one("li.content-item")
-        if first_block:
-            events = _parse_events(first_block)
+        # Skip if we already collected this date (avoids the daylist duplicate for today)
+        if date_str in seen_dates:
+            continue
+        seen_dates.add(date_str)
+
+        day_events = _parse_events(day_block, date_str)
+        events.extend(day_events)
+
+        if f"{today_day} de" in label.get_text(strip=True) and today_date_str is None:
+            today_date_str = date_str
 
     return {
-        "date": date_str,
+        "date": today_date_str or (events[0]["date"] if events else ""),
         "events": events,
         "scraped_at": datetime.now().isoformat(),
     }

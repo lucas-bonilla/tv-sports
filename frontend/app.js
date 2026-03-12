@@ -5,6 +5,7 @@ const STORAGE_KEY = "sports-tv-filter-order";
 
 let allEvents = [];
 let activeFilter = "Todos";
+let activeDateFilter = "Hoy";
 
 function getSavedOrder() {
   try {
@@ -56,8 +57,9 @@ async function fetchEvents() {
     document.getElementById("last-updated").textContent =
       `Actualizado: ${new Date(data.scraped_at).toLocaleTimeString("es-ES")}`;
 
+    buildDateFilters(allEvents, data.date);
     buildFilters(allEvents);
-    renderEvents(allEvents, activeFilter);
+    renderEvents(allEvents, activeFilter, activeDateFilter);
   } catch (err) {
     container.innerHTML = `<div class="error-msg">\u274C Error al cargar datos.<br/><small>${err.message}</small></div>`;
   } finally {
@@ -108,7 +110,7 @@ function handleDrop(e) {
   saveOrder(newOrder);
 
   // Re-render events in new sport order
-  renderEvents(allEvents, activeFilter);
+  renderEvents(allEvents, activeFilter, activeDateFilter);
 }
 
 function handleDragEnd() {
@@ -182,13 +184,43 @@ function handleTouchEnd(e) {
     const newOrder = [...bar.querySelectorAll(".filter-chip[draggable]")]
       .map(c => c.dataset.sport);
     saveOrder(newOrder);
-    renderEvents(allEvents, activeFilter);
+    renderEvents(allEvents, activeFilter, activeDateFilter);
   }
 
   touchSrcEl.classList.remove("dragging");
   document.querySelectorAll(".filter-chip").forEach(c => c.classList.remove("drag-over"));
   if (touchClone) { touchClone.remove(); touchClone = null; }
   touchSrcEl = null;
+}
+
+// --- Date filter ---
+
+function buildDateFilters(events, todayDate) {
+  const bar = document.getElementById("date-bar");
+  const dates = [...new Set(events.map(e => e.date))];
+
+  const labels = dates.map(d => {
+    if (d === todayDate) return { label: "Hoy", value: d };
+    // Extract just "Viernes 13" style short label
+    const parts = d.split(" ");
+    const short = parts.slice(0, 2).join(" ");
+    return { label: short, value: d };
+  });
+
+  const all = [{ label: "Todos", value: "Todos" }, ...labels];
+
+  bar.innerHTML = all.map(({ label, value }) =>
+    `<button class="filter-chip ${label === activeDateFilter ? "active" : ""}" data-date="${value}">${label}</button>`
+  ).join("");
+
+  bar.querySelectorAll(".filter-chip").forEach(btn => {
+    btn.addEventListener("click", () => {
+      activeDateFilter = btn.textContent.trim();
+      bar.querySelectorAll(".filter-chip").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      renderEvents(allEvents, activeFilter, activeDateFilter);
+    });
+  });
 }
 
 // --- Build filters ---
@@ -211,7 +243,7 @@ function buildFilters(events) {
       activeFilter = btn.dataset.sport;
       bar.querySelectorAll(".filter-chip").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
-      renderEvents(allEvents, activeFilter);
+      renderEvents(allEvents, activeFilter, activeDateFilter);
     });
   });
 
@@ -229,39 +261,24 @@ function buildFilters(events) {
   });
 }
 
-function renderEvents(events, filter) {
-  const container = document.getElementById("events-container");
-  const filtered = filter === "Todos" ? events : events.filter(e => e.sport === filter);
+function renderSportGroups(events) {
+  const bar = document.getElementById("filter-bar");
+  const chipOrder = [...bar.querySelectorAll(".filter-chip[draggable]")].map(c => c.dataset.sport);
 
-  if (filtered.length === 0) {
-    container.innerHTML = '<div class="no-results">No hay eventos para este filtro.</div>';
-    return;
-  }
-
-  // Group by sport
   const grouped = {};
-  filtered.forEach(e => {
+  events.forEach(e => {
     if (!grouped[e.sport]) grouped[e.sport] = [];
     grouped[e.sport].push(e);
   });
 
-  // Respect filter bar order for sport groups
-  const bar = document.getElementById("filter-bar");
-  const chipOrder = [...bar.querySelectorAll(".filter-chip[draggable]")]
-    .map(c => c.dataset.sport);
   const orderedSports = chipOrder.filter(s => grouped[s]);
-  // Add any sports not in chips (shouldn't happen, but just in case)
-  Object.keys(grouped).forEach(s => {
-    if (!orderedSports.includes(s)) orderedSports.push(s);
-  });
+  Object.keys(grouped).forEach(s => { if (!orderedSports.includes(s)) orderedSports.push(s); });
 
-  container.innerHTML = orderedSports.map(sport => {
+  return orderedSports.map(sport => {
     const items = grouped[sport];
     return `
     <div class="sport-group">
-      <div class="sport-group-header">
-        ${items[0].emoji} ${sport}
-      </div>
+      <div class="sport-group-header">${items[0].emoji} ${sport}</div>
       ${items.map(e => `
         <div class="event-card">
           <div class="event-time">${e.time}</div>
@@ -274,9 +291,43 @@ function renderEvents(events, filter) {
           </div>
         </div>
       `).join("")}
-    </div>
-  `;
+    </div>`;
   }).join("");
+}
+
+function renderEvents(events, sportFilter) {
+  const container = document.getElementById("events-container");
+
+  // Resolve date filter value from label back to actual date string
+  const dateBar = document.getElementById("date-bar");
+  const activeDateBtn = dateBar.querySelector(".filter-chip.active");
+  const activeDateValue = activeDateBtn ? activeDateBtn.dataset.date : "Todos";
+
+  let filtered = sportFilter === "Todos" ? events : events.filter(e => e.sport === sportFilter);
+  if (activeDateValue !== "Todos") {
+    filtered = filtered.filter(e => e.date === activeDateValue);
+  }
+
+  if (filtered.length === 0) {
+    container.innerHTML = '<div class="no-results">No hay eventos para este filtro.</div>';
+    return;
+  }
+
+  if (activeDateValue === "Todos") {
+    // Group by day, then by sport within each day
+    const days = [...new Set(events.map(e => e.date))];
+    container.innerHTML = days.map(date => {
+      const dayEvents = filtered.filter(e => e.date === date);
+      if (dayEvents.length === 0) return "";
+      return `
+        <div class="day-section">
+          <div class="day-header">${date}</div>
+          ${renderSportGroups(dayEvents)}
+        </div>`;
+    }).join("");
+  } else {
+    container.innerHTML = renderSportGroups(filtered);
+  }
 }
 
 document.getElementById("refresh-btn").addEventListener("click", fetchEvents);
