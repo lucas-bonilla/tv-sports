@@ -126,11 +126,39 @@ header h1 {
 /* Sport group */
 main {
   padding: 1rem;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 1fr;
   gap: 1.25rem;
   max-width: 680px;
   margin: 0 auto;
+}
+
+@media (min-width: 1000px) {
+  main {
+    max-width: 1360px;
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
+
+  /* Day sections span both columns as a header, sport groups inside go 2-col */
+  .day-section {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.25rem;
+  }
+
+  .day-header {
+    grid-column: 1 / -1;
+  }
+
+  .filter-bar {
+    max-width: 1360px;
+    margin: 0 auto;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
 }
 
 .sport-group {
