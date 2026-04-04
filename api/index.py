@@ -1,8 +1,9 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio
 import logging
 import time
@@ -164,6 +165,65 @@ async def get_events():
                 logger.warning("Returning stale cache after scrape failure")
                 return _cache["data"]
             raise HTTPException(status_code=500, detail="Failed to fetch schedule. Try again later.")
+
+
+MONTHS_ES = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+    "julio": 7, "agosto": 8, "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
+}
+
+
+def _parse_es_date(date_str: str, time_str: str) -> datetime:
+    """Parse Spanish date like 'Jueves 13 de Marzo' or 'Sábado 4 de Abril de 2026' + 'HH:MM'."""
+    parts = date_str.lower().split()
+    # parts: [weekday, day, 'de', month, ('de', year)?]
+    try:
+        day = int(parts[1])
+        month_name = parts[3]
+        month = MONTHS_ES.get(month_name)
+        if month is None:
+            raise ValueError(f"Unknown month: {month_name}")
+        year = int(parts[5]) if len(parts) >= 6 else datetime.now().year
+        hours, minutes = map(int, time_str.split(":"))
+        return datetime(year, month, day, hours, minutes)
+    except (IndexError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid date/time: {exc}")
+
+
+@app.get("/api/ics")
+def get_ics(
+    summary: str = Query(...),
+    date: str = Query(...),
+    time: str = Query(...),
+    description: str = Query(""),
+):
+    dt = _parse_es_date(date, time)
+
+    end = dt + timedelta(hours=2)
+
+    def fmt(d: datetime) -> str:
+        return d.strftime("%Y%m%dT%H%M%S")
+
+    uid = f"{int(dt.timestamp())}@sports-tv"
+    ics = "\r\n".join([
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Sports TV//ES",
+        "BEGIN:VEVENT",
+        f"UID:{uid}",
+        f"DTSTART:{fmt(dt)}",
+        f"DTEND:{fmt(end)}",
+        f"SUMMARY:{summary}",
+        f"DESCRIPTION:{description}",
+        "END:VEVENT",
+        "END:VCALENDAR",
+    ])
+
+    return Response(
+        content=ics,
+        media_type="text/calendar; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="evento.ics"'},
+    )
 
 
 @app.get("/api/health")

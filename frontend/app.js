@@ -471,8 +471,18 @@ function openCalendarModal(event) {
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
   const links = start ? calendarLinks(event, start) : null;
 
+  const icsUrl = ics ? (() => {
+    const p = new URLSearchParams({
+      summary: event.match || event.sport,
+      date: event.date,
+      time: event.time,
+      description: [event.competition, event.channel].filter(Boolean).join(" · "),
+    });
+    return `/api/ics?${p.toString()}`;
+  })() : null;
+
   const calButtons = ics ? (isIOS
-    ? `<button class="cal-modal-btn" id="cal-add-btn">Añadir al calendario</button>`
+    ? `<a class="cal-modal-btn" href="${icsUrl}">Añadir al calendario</a>`
     : `<div class="cal-modal-options">
         <a class="cal-modal-btn cal-modal-btn--outline" href="${links.google}" target="_blank" rel="noopener">Google Calendar</a>
         <button class="cal-modal-btn cal-modal-btn--ghost" id="cal-add-btn">⬇ Descargar .ics</button>
@@ -501,22 +511,12 @@ function openCalendarModal(event) {
   if (addBtn) {
     addBtn.addEventListener("click", () => {
       const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
-      if (isIOS) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const a = document.createElement("a");
-          a.href = reader.result;
-          a.click();
-        };
-        reader.readAsDataURL(blob);
-      } else {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "evento.ics";
-        a.click();
-        URL.revokeObjectURL(url);
-      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "evento.ics";
+      a.click();
+      URL.revokeObjectURL(url);
       modal.remove();
     });
   }
