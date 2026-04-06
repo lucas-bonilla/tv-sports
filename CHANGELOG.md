@@ -8,12 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `/api/ics` backend endpoint that serves `.ics` files with proper `text/calendar` content type
+- On iOS, "Añadir al calendario" is now a direct link to `/api/ics` — skips the share sheet and permission prompt, going straight to the native calendar add screen
 - Server-side in-memory cache with 15-minute TTL and stale fallback on scrape failure
 - Service worker now caches API responses and serves them offline (503 with cached data and a clear user message)
 - SW static cache key changed from `Date.now()` to a deterministic version string to prevent unnecessary cache busting
 - Race condition protection in Python cache under concurrent requests (asyncio.Lock with double-check pattern)
 
 ### Fixed
+
+- iOS calendar flow no longer triggers a two-step share sheet + permission dialog; now opens the native "Add to Calendar" screen in one tap
 - Fire-and-forget SW cache writes are now awaited with proper error handling
 - `activeDateFilter` now uses `null` for "not yet set" so a page refresh no longer overrides an explicit "Todos" selection
 
