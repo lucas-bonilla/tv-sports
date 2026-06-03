@@ -14,6 +14,13 @@
   --sport-bg: #1f2937;
   --card-bg: #1c2128;
   --radius: 10px;
+  --content-max: 680px; /* width of the centered content column; widened on desktop */
+}
+
+/* On desktop the 680px column leaves large empty side margins, so give the
+   content more room. */
+@media (min-width: 900px) {
+  :root { --content-max: 900px; }
 }
 
 body {
@@ -144,7 +151,7 @@ main {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
-  max-width: 680px;
+  max-width: var(--content-max);
   margin: 0 auto;
 }
 
@@ -526,7 +533,7 @@ main {
 }
 
 .page-section {
-  max-width: 680px;
+  max-width: var(--content-max);
   margin: 0 auto;
   scroll-margin-top: 3.5rem; /* offset for sticky section-nav on anchor jump */
 }
@@ -665,7 +672,7 @@ main {
 
 /* ===== Collapsible season calendar ===== */
 .padel-calendar-block {
-  max-width: 680px;
+  max-width: var(--content-max);
   margin: 0.5rem auto 0;
   padding: 0 1rem;
 }
