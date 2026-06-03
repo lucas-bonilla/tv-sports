@@ -1,6 +1,6 @@
-const STATIC_CACHE = "sports-tv-static-v8";
+const STATIC_CACHE = "sports-tv-static-v9";
 const API_CACHE = "sports-tv-api-v1";
-const STATIC = ["/", "/index.html", "/style.css", "/app.js", "/padel.js", "/manifest.json"];
+const STATIC = ["/", "/index.html", "/style.css", "/app.js", "/manifest.json"];
 
 self.addEventListener("install", e => {
   e.waitUntil(
@@ -22,7 +22,7 @@ self.addEventListener("activate", e => {
 });
 
 // Network-first API endpoints: always fetch fresh, fall back to cache offline.
-const NETWORK_FIRST_API = ["/api/events", "/api/padel/"];
+const NETWORK_FIRST_API = ["/api/events"];
 
 self.addEventListener("fetch", e => {
   const isNetworkFirstApi = NETWORK_FIRST_API.some(p => e.request.url.includes(p));
