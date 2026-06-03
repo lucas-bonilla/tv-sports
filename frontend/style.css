@@ -109,6 +109,21 @@ header h1 {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.3);
 }
+
+/* On wider viewports the single horizontal-scroll row looks cramped and clips
+   chips off the right edge. There's plenty of width, so let them wrap onto
+   multiple rows and stay fully visible. Mobile keeps the scroll row. */
+@media (min-width: 600px) {
+  .filter-bar {
+    flex-wrap: wrap;
+    overflow-x: visible;
+    row-gap: 0.5rem;
+  }
+  .filter-chip {
+    padding: 0.35rem 0.85rem;
+    font-size: 0.8rem;
+  }
+}
 .drag-clone {
   position: fixed;
   z-index: 999;
