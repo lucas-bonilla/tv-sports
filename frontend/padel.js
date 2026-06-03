@@ -179,7 +179,16 @@ async function showPadelSchedule(slug) {
 
     container.onclick = e => {
       const header = e.target.closest(".sport-group-header[data-toggle]");
-      if (header) header.closest(".sport-group").classList.toggle("collapsed");
+      if (header) { header.closest(".sport-group").classList.toggle("collapsed"); return; }
+
+      const card = e.target.closest(".padel-match[data-padel-event]");
+      if (card) openPadelCalendar(JSON.parse(decodeURIComponent(card.dataset.padelEvent)));
+    };
+
+    container.onkeydown = e => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      const card = e.target.closest(".padel-match[data-padel-event]");
+      if (card) { e.preventDefault(); openPadelCalendar(JSON.parse(decodeURIComponent(card.dataset.padelEvent))); }
     };
   } catch (err) {
     container.innerHTML = `<div class="error-msg">❌ Error al cargar el cuadro.<br/><small>${err.message}</small></div>`;
@@ -196,6 +205,12 @@ function renderMatch(m) {
   const slotLabel = live ? "En juego" : done ? "Finalizado" : (m.slot || "");
   const slotClass = live ? "padel-match-live" : done ? "padel-slot--done" : "padel-slot";
 
+  // Only upcoming matches with a known court start can be added to a calendar
+  // (a finished/live match makes no sense to schedule, and "A continuación"
+  // has no clock time to anchor the entry).
+  const addable = !live && !done && !!m.court_start && !!m.date;
+  const payload = addable ? encodeURIComponent(JSON.stringify(m)) : "";
+
   const tags = [
     m.round ? `<span class="event-competition">${m.round}</span>` : "",
     m.draw_type ? `<span class="padel-draw">${m.draw_type}</span>` : "",
@@ -207,16 +222,48 @@ function renderMatch(m) {
   };
 
   return `
-    <div class="padel-match ${live ? "padel-match--live" : ""} ${done ? "padel-match--done" : ""}">
+    <div class="padel-match ${live ? "padel-match--live" : ""} ${done ? "padel-match--done" : ""} ${addable ? "padel-match--addable" : ""}"
+      ${addable ? `data-padel-event="${payload}" role="button" tabindex="0" title="Añadir al calendario"` : ""}>
       <div class="padel-match-head">
         <span class="${slotClass}">${live ? "● " : ""}${slotLabel}</span>
         ${tags}
+        ${addable ? '<span class="padel-cal-add">📅</span>' : ""}
       </div>
       <div class="padel-match-teams">
         ${teamRow(m.team_a, m.score_a, "a")}
         ${teamRow(m.team_b, m.score_b, "b")}
       </div>
     </div>`;
+}
+
+// Map a padel match onto the shape openCalendarModal() (in app.js) expects, then
+// reuse that single modal so padel behaves exactly like the TV cards.
+// parseEventDate() in app.js wants a Spanish text date ("jueves 13 de marzo"),
+// not the ISO "2026-06-03" the padel API returns — so build that explicitly.
+const MONTHS_ES_NAMES = [
+  "enero", "febrero", "marzo", "abril", "mayo", "junio",
+  "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+];
+
+function padelEventForCalendar(m) {
+  const [y, mo, d] = (m.date || "").split("-").map(Number);
+  if (!y || !mo || !d) return null;
+  const dateText = `padel ${d} de ${MONTHS_ES_NAMES[mo - 1]}`; // parser reads parts[1]=day, parts[3]=month
+  const tournament = padelTournaments.find(t => t.slug === selectedSlug);
+  return {
+    emoji: "🎾",
+    match: `${m.team_a} vs ${m.team_b}`,
+    sport: "Pádel",
+    date: dateText,
+    time: m.court_start,                       // court start-of-play (HH:MM)
+    competition: [tournament?.name || tournament?.country, m.round].filter(Boolean).join(" · "),
+    channel: m.court ? `Pista: ${m.court}` : "",
+  };
+}
+
+function openPadelCalendar(m) {
+  const event = padelEventForCalendar(m);
+  if (event && typeof openCalendarModal === "function") openCalendarModal(event);
 }
 
 // Load padel immediately on page load (single-page layout, no tab gating).
