@@ -16,19 +16,60 @@
     <button id="refresh-btn" class="refresh-btn" title="Actualizar">↻</button>
   </header>
 
-  <div id="date-bar" class="filter-bar date-bar"></div>
-  <div id="filter-bar" class="filter-bar"></div>
+  <!-- Quick jump between sections -->
+  <nav id="section-nav" class="section-nav">
+    <a class="section-nav-link" href="#sec-tv">📺 TV</a>
+    <a class="section-nav-link" href="#sec-padel">🎾 Pádel</a>
+  </nav>
 
-  <main id="events-container">
-    <div class="spinner"></div>
-  </main>
+  <!-- ===== TV section ===== -->
+  <section id="sec-tv" class="page-section">
+    <div class="section-head">
+      <h2 class="section-title">📺 Programación TV</h2>
+    </div>
+    <div class="section-sticky">
+      <div id="date-bar" class="filter-bar date-bar"></div>
+      <div id="filter-bar" class="filter-bar"></div>
+    </div>
 
-  <div id="last-updated" class="last-updated"></div>
+    <main id="events-container">
+      <div class="spinner"></div>
+    </main>
+
+    <div id="last-updated" class="last-updated"></div>
+  </section>
+
+  <!-- ===== Padel section ===== -->
+  <section id="sec-padel" class="page-section">
+    <div class="section-head">
+      <h2 class="section-title">🎾 Pádel</h2>
+      <span id="padel-live-tag" class="section-live-tag" hidden></span>
+    </div>
+    <div class="section-sticky">
+      <div id="padel-tournament-bar" class="filter-bar"></div>
+    </div>
+
+    <main id="padel-container">
+      <div class="spinner"></div>
+    </main>
+
+    <!-- Full-season calendar, collapsed by default -->
+    <div id="padel-calendar-block" class="padel-calendar-block" hidden>
+      <button id="padel-calendar-toggle" class="padel-calendar-toggle" aria-expanded="false">
+        <span>📅 Calendario 2026</span>
+        <span class="chevron">›</span>
+      </button>
+      <div id="padel-calendar-body" class="padel-calendar-body" hidden></div>
+    </div>
+
+    <div id="padel-updated" class="last-updated"></div>
+  </section>
 
   <div id="quick-nav-panel" class="quick-nav-panel"></div>
   <button id="quick-nav-btn" class="quick-nav-btn" title="Ir a deporte">☰</button>
   <button id="back-to-top" class="back-to-top" title="Volver arriba">↑</button>
 
   <script src="app.js"></script>
+  <script src="padel.js"></script>
 </body>
 </html>

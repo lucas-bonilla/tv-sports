@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Padel tracking** via the Premier Padel (Qatar Airways Premier Padel Tour) API:
+  - `/api/padel/tournaments` — season calendar of all tournaments with normalized status (live/upcoming/finished), category, country, dates, and prize money
+  - `/api/padel/schedule?slug=<slug>` — order of play for a tournament, grouped by day then court, with teams, set scores, round, and live/completed status
+  - New "Pádel" tab in the header that toggles between the TV schedule and padel. The calendar groups tournaments by status; when a tournament is live it opens straight into its schedule
+  - Data comes from the `api-prod.premierpadel.com` JSON API directly (the site is a JS-rendered SPA, so HTML scraping returns nothing)
+  - Separate caches: 1h TTL for the calendar, 5min TTL for live schedules, both with stale fallback on failure
+  - Service worker: padel API calls are network-first (so live scores stay fresh) and `padel.js` is added to the offline static cache
 - `/api/ics` backend endpoint that serves `.ics` files with proper `text/calendar` content type
 - On iOS, "Añadir al calendario" is now a direct link to `/api/ics` — skips the share sheet and permission prompt, going straight to the native calendar add screen
 - Server-side in-memory cache with 15-minute TTL and stale fallback on scrape failure

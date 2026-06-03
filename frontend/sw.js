@@ -1,6 +1,6 @@
-const STATIC_CACHE = "sports-tv-static-v5";
+const STATIC_CACHE = "sports-tv-static-v8";
 const API_CACHE = "sports-tv-api-v1";
-const STATIC = ["/", "/index.html", "/style.css", "/app.js", "/manifest.json"];
+const STATIC = ["/", "/index.html", "/style.css", "/app.js", "/padel.js", "/manifest.json"];
 
 self.addEventListener("install", e => {
   e.waitUntil(
@@ -21,8 +21,13 @@ self.addEventListener("activate", e => {
   );
 });
 
+// Network-first API endpoints: always fetch fresh, fall back to cache offline.
+const NETWORK_FIRST_API = ["/api/events", "/api/padel/"];
+
 self.addEventListener("fetch", e => {
-  if (e.request.url.includes("/api/events")) {
+  const isNetworkFirstApi = NETWORK_FIRST_API.some(p => e.request.url.includes(p));
+  if (isNetworkFirstApi) {
+    const isEvents = e.request.url.includes("/api/events");
     e.respondWith(
       fetch(e.request)
         .then(async res => {
@@ -38,10 +43,13 @@ self.addEventListener("fetch", e => {
         .catch(async () => {
           const cached = await caches.match(e.request, { cacheName: API_CACHE });
           if (cached) return cached;
-          return new Response(
-            JSON.stringify({ error: "Offline", events: [], date: "", scraped_at: new Date().toISOString() }),
-            { status: 503, headers: { "Content-Type": "application/json" } }
-          );
+          const body = isEvents
+            ? { error: "Offline", events: [], date: "", scraped_at: new Date().toISOString() }
+            : { error: "Offline" };
+          return new Response(JSON.stringify(body), {
+            status: 503,
+            headers: { "Content-Type": "application/json" },
+          });
         })
     );
   } else {
