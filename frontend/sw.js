@@ -1,4 +1,4 @@
-const STATIC_CACHE = "sports-tv-static-v11";
+const STATIC_CACHE = "sports-tv-static-v12";
 const API_CACHE = "sports-tv-api-v1";
 const STATIC = ["/", "/index.html", "/style.css", "/app.js", "/padel.js", "/manifest.json"];
 

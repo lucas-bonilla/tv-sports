@@ -227,7 +227,6 @@ function renderMatch(m) {
       <div class="padel-match-head">
         <span class="${slotClass}">${live ? "● " : ""}${slotLabel}</span>
         ${tags}
-        ${addable ? '<span class="padel-cal-add">📅</span>' : ""}
       </div>
       <div class="padel-match-teams">
         ${teamRow(m.team_a, m.score_a, "a")}
