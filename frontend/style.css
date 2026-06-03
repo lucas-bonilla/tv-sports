@@ -672,6 +672,11 @@ main {
   flex-direction: column;
   gap: 0.9rem;
 }
+/* The HTML `hidden` attribute is display:none, but an explicit display rule
+   (flex above) overrides it — so collapse needs to be asserted explicitly. */
+.padel-calendar-body[hidden] {
+  display: none;
+}
 .padel-cal-group-head {
   font-size: 0.72rem;
   font-weight: 700;
