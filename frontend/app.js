@@ -530,7 +530,10 @@ document.getElementById("events-container").addEventListener("click", e => {
   openCalendarModal(event);
 });
 
-document.getElementById("refresh-btn").addEventListener("click", fetchEvents);
+document.getElementById("refresh-btn").addEventListener("click", () => {
+  fetchEvents();
+  if (typeof fetchPadelTournaments === "function") fetchPadelTournaments();
+});
 
 // Quick-nav FAB
 const quickNavBtn = document.getElementById("quick-nav-btn");
