@@ -370,6 +370,12 @@ function buildQuickNav() {
     });
   }
 
+  // Always offer a jump to the Padel section at the bottom of the list
+  const padelSection = document.getElementById("sec-padel");
+  if (padelSection) {
+    items.push({ label: "🎾 Pádel", el: padelSection });
+  }
+
   if (items.length <= 1) {
     panel.innerHTML = "";
     return;
