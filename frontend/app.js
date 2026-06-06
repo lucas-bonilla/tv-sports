@@ -1,7 +1,10 @@
 const API_URL = "/api/events";
 
-const DEFAULT_ORDER = ["Futbol", "Tenis", "Formula 1", "NBA"];
+const DEFAULT_ORDER = ["Fútbol", "Tenis", "Fórmula 1", "Baloncesto"];
+// Bump this when DEFAULT_ORDER changes to discard incompatible saved orders.
+const ORDER_VERSION = "2";
 const STORAGE_KEY = "sports-tv-filter-order";
+const ORDER_VERSION_KEY = "sports-tv-filter-order-version";
 
 let allEvents = [];
 let activeFilter = null; // null = no sport selected → show all sports
@@ -9,6 +12,13 @@ let activeDateFilter = null; // null = no day selected → show all days
 
 function getSavedOrder() {
   try {
+    // Discard any saved order from a previous DEFAULT_ORDER version so users
+    // pick up the new default instead of a stale dragged order.
+    if (localStorage.getItem(ORDER_VERSION_KEY) !== ORDER_VERSION) {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.setItem(ORDER_VERSION_KEY, ORDER_VERSION);
+      return null;
+    }
     const saved = localStorage.getItem(STORAGE_KEY);
     return saved ? JSON.parse(saved) : null;
   } catch { return null; }
