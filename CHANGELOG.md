@@ -22,7 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SW static cache key changed from `Date.now()` to a deterministic version string to prevent unnecessary cache busting
 - Race condition protection in Python cache under concurrent requests (asyncio.Lock with double-check pattern)
 
+### Changed
+
+- Filter rows (date + sport) are now grouped into a single rounded card with a divider between rows; filter chips have refined resting/hover/active states
+- Removed the redundant "📺 Programación TV" section heading — the page header already identifies the app (reclaims vertical space, notably on iOS)
+- TV schedule now defaults to showing **all** events when no day is selected; picking a day/sport filters to that selection (previously defaulted to today)
+
 ### Fixed
+
+- Refresh button now also refreshes the padel section; previously the iOS shortcut had to be closed and reopened to get fresh padel data
 
 - iOS calendar flow no longer triggers a two-step share sheet + permission dialog; now opens the native "Add to Calendar" screen in one tap
 - Fire-and-forget SW cache writes are now awaited with proper error handling
