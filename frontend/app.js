@@ -4,7 +4,7 @@ const DEFAULT_ORDER = ["Futbol", "Tenis", "Formula 1", "NBA"];
 const STORAGE_KEY = "sports-tv-filter-order";
 
 let allEvents = [];
-let activeFilter = "Todos";
+let activeFilter = null; // null = no sport selected → show all sports
 let activeDateFilter = null; // null = no day selected → show all days
 
 function getSavedOrder() {
@@ -133,8 +133,6 @@ let touchStartX = 0;
 
 function handleTouchStart(e) {
   const chip = e.currentTarget;
-  if (chip.dataset.sport === "Todos") return;
-
   touchSrcEl = chip;
   touchStartX = e.touches[0].clientX;
 
@@ -214,18 +212,17 @@ function buildDateFilters(events, todayDate) {
     return { label: short, value: d };
   });
 
-  const all = [{ label: "Todos", value: "Todos" }, ...labels];
-
-  bar.innerHTML = all.map(({ label, value }) => {
-    const isActive = value === activeDateFilter || (activeDateFilter === null && value === "Todos");
+  bar.innerHTML = labels.map(({ label, value }) => {
+    const isActive = value === activeDateFilter;
     return `<button class="filter-chip ${isActive ? "active" : ""}" data-date="${value}">${label}</button>`;
   }).join("");
 
   bar.querySelectorAll(".filter-chip").forEach(btn => {
     btn.addEventListener("click", () => {
-      activeDateFilter = btn.dataset.date; // store the value, not the label
+      // Tapping the active chip deselects it → back to showing all days
+      activeDateFilter = btn.dataset.date === activeDateFilter ? null : btn.dataset.date;
       bar.querySelectorAll(".filter-chip").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
+      if (activeDateFilter !== null) btn.classList.add("active");
       renderEvents(allEvents, activeFilter);
     });
   });
@@ -237,20 +234,18 @@ function buildFilters(events) {
   const bar = document.getElementById("filter-bar");
   const sportNames = [...new Set(events.map(e => e.sport))];
   const sorted = sortSports(sportNames);
-  const sports = ["Todos", ...sorted];
-
-  bar.innerHTML = sports.map(sport => {
-    const draggable = sport !== "Todos" ? 'draggable="true"' : "";
-    return `<button class="filter-chip ${sport === activeFilter ? "active" : ""}" data-sport="${sport}" ${draggable}>
+  bar.innerHTML = sorted.map(sport => {
+    return `<button class="filter-chip ${sport === activeFilter ? "active" : ""}" data-sport="${sport}" draggable="true">
       ${sport}
     </button>`;
   }).join("");
 
   bar.querySelectorAll(".filter-chip").forEach(btn => {
     btn.addEventListener("click", () => {
-      activeFilter = btn.dataset.sport;
+      // Tapping the active chip deselects it → back to showing all sports
+      activeFilter = btn.dataset.sport === activeFilter ? null : btn.dataset.sport;
       bar.querySelectorAll(".filter-chip").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
+      if (activeFilter !== null) btn.classList.add("active");
       renderEvents(allEvents, activeFilter, activeDateFilter);
     });
   });
@@ -315,10 +310,10 @@ function renderSportGroups(events) {
 function renderEvents(events, sportFilter) {
   const container = document.getElementById("events-container");
 
-  const dateValue = activeDateFilter; // null or "Todos" = show all
+  const dateValue = activeDateFilter; // null = show all days
 
-  let filtered = sportFilter === "Todos" ? events : events.filter(e => e.sport === sportFilter);
-  if (dateValue && dateValue !== "Todos") {
+  let filtered = !sportFilter ? events : events.filter(e => e.sport === sportFilter);
+  if (dateValue) {
     filtered = filtered.filter(e => e.date === dateValue);
   }
 
@@ -327,7 +322,7 @@ function renderEvents(events, sportFilter) {
     return;
   }
 
-  if (!dateValue || dateValue === "Todos") {
+  if (!dateValue) {
     // Group by day, then by sport within each day
     const days = [...new Set(events.map(e => e.date))];
     container.innerHTML = days.map(date => {
@@ -362,7 +357,7 @@ function buildQuickNav() {
   let items = [];
 
   if (daySections.length > 0) {
-    // "Todos" mode: navigate by day
+    // All-days mode: navigate by day
     daySections.forEach(section => {
       const header = section.querySelector(".day-header");
       if (header) items.push({ label: header.textContent.trim(), el: section });
