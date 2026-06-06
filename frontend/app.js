@@ -5,7 +5,7 @@ const STORAGE_KEY = "sports-tv-filter-order";
 
 let allEvents = [];
 let activeFilter = "Todos";
-let activeDateFilter = null; // null = not yet set (defaults to today on first load)
+let activeDateFilter = null; // null = no day selected → show all days
 
 function getSavedOrder() {
   try {
@@ -63,11 +63,6 @@ async function fetchEvents() {
     document.getElementById("last-updated").textContent = isOffline
       ? `Sin conexión — mostrando programación guardada (${new Date(data.scraped_at).toLocaleTimeString("es-ES")})`
       : `Actualizado: ${new Date(data.scraped_at).toLocaleTimeString("es-ES")}`;
-
-    // Default to today's date on first load only
-    if (activeDateFilter === null && data.date) {
-      activeDateFilter = data.date;
-    }
 
     buildDateFilters(allEvents, data.date);
     buildFilters(allEvents);
