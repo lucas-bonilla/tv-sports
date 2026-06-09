@@ -16,15 +16,39 @@
     <button id="refresh-btn" class="refresh-btn" title="Actualizar">↻</button>
   </header>
 
-  <!-- ===== TV section ===== -->
-  <section id="sec-tv" class="page-section">
-    <div class="section-sticky">
-      <div class="filter-group">
-        <div id="date-bar" class="filter-bar date-bar"></div>
-        <div id="filter-bar" class="filter-bar"></div>
-      </div>
+  <!-- ===== Global filters (day + TV sports), control every section ===== -->
+  <div class="global-sticky">
+    <div class="filter-group">
+      <div id="global-date-bar" class="filter-bar date-bar"></div>
+      <div id="filter-bar" class="filter-bar"></div>
+    </div>
+  </div>
+
+  <!-- ===== World Cup section ===== -->
+  <section id="sec-wc" class="page-section">
+    <div class="section-head">
+      <h2 class="section-title section-title--lg">🏆 Mundial 2026</h2>
+      <span id="wc-live-tag" class="section-live-tag" hidden></span>
     </div>
 
+    <main id="wc-container">
+      <div class="spinner"></div>
+    </main>
+
+    <!-- Group standings, collapsed by default -->
+    <div id="wc-standings-block" class="padel-calendar-block" hidden>
+      <button id="wc-standings-toggle" class="padel-calendar-toggle" aria-expanded="false">
+        <span>📊 Clasificación por grupos</span>
+        <span class="chevron">›</span>
+      </button>
+      <div id="wc-standings-body" class="padel-calendar-body" hidden></div>
+    </div>
+
+    <div id="wc-updated" class="last-updated"></div>
+  </section>
+
+  <!-- ===== TV section ===== -->
+  <section id="sec-tv" class="page-section">
     <main id="events-container">
       <div class="spinner"></div>
     </main>
@@ -65,6 +89,7 @@
   <button id="back-to-top" class="back-to-top" title="Volver arriba">↑</button>
 
   <script src="app.js"></script>
+  <script src="worldcup.js"></script>
   <script src="padel.js"></script>
 </body>
 </html>

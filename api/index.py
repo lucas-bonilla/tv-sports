@@ -342,6 +342,239 @@ def get_padel_schedule(slug: str) -> dict:
     }
 
 
+# --- FIFA World Cup client (TheSportsDB) ---
+#
+# TheSportsDB exposes the World Cup (league id 4429) for free. The test key "3"
+# works but is rate-limited; override it with THESPORTSDB_KEY in production.
+# Unlike Premier Padel, the season endpoint already carries played scores, so the
+# same payload serves both the upcoming fixtures and the results of past days.
+
+import os
+
+WC_KEY = os.environ.get("THESPORTSDB_KEY", "3")
+WC_API = f"https://www.thesportsdb.com/api/v1/json/{WC_KEY}"
+WC_LEAGUE_ID = "4429"  # FIFA World Cup
+WC_SEASON = os.environ.get("WC_SEASON", "2026")
+
+
+# Map TheSportsDB national-team names to ISO-3166 alpha-2 codes so we can render
+# a flag emoji instead of the federation crest. Covers every nation that can
+# realistically appear at the 2026 World Cup (48 teams) plus common qualifiers.
+WC_TEAM_ISO = {
+    "Argentina": "AR", "Australia": "AU", "Austria": "AT", "Belgium": "BE",
+    "Bolivia": "BO", "Bosnia-Herzegovina": "BA", "Brazil": "BR", "Cameroon": "CM",
+    "Canada": "CA", "Cape Verde": "CV", "Chile": "CL", "Colombia": "CO",
+    "Costa Rica": "CR", "Croatia": "HR", "Curaçao": "CW", "Czech Republic": "CZ",
+    "Denmark": "DK", "DR Congo": "CD", "Ecuador": "EC", "Egypt": "EG",
+    "England": "GB-ENG", "France": "FR", "Germany": "DE", "Ghana": "GH",
+    "Greece": "GR", "Haiti": "HT", "Honduras": "HN", "Hungary": "HU",
+    "Iran": "IR", "Italy": "IT", "Ivory Coast": "CI", "Jamaica": "JM",
+    "Japan": "JP", "Jordan": "JO", "Mexico": "MX", "Morocco": "MA",
+    "Netherlands": "NL", "New Zealand": "NZ", "Nigeria": "NG", "Norway": "NO",
+    "Panama": "PA", "Paraguay": "PY", "Peru": "PE", "Poland": "PL",
+    "Portugal": "PT", "Qatar": "QA", "Republic of Ireland": "IE", "Romania": "RO",
+    "Saudi Arabia": "SA", "Scotland": "GB-SCT", "Senegal": "SN", "Serbia": "RS",
+    "Slovakia": "SK", "Slovenia": "SI", "South Africa": "ZA", "South Korea": "KR",
+    "Spain": "ES", "Sweden": "SE", "Switzerland": "CH", "Tunisia": "TN",
+    "Turkey": "TR", "Ukraine": "UA", "Uruguay": "UY", "USA": "US",
+    "Uzbekistan": "UZ", "Venezuela": "VE", "Wales": "GB-WLS",
+}
+
+# Regional-indicator flags only exist for 2-letter country codes; the home
+# nations (England/Scotland/Wales) need their subdivision emoji instead.
+WC_SUBDIVISION_FLAG = {
+    "GB-ENG": "\U0001F3F4\U000E0067\U000E0062\U000E0065\U000E006E\U000E0067\U000E007F",  # 🏴 England
+    "GB-SCT": "\U0001F3F4\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F",  # 🏴 Scotland
+    "GB-WLS": "\U0001F3F4\U000E0067\U000E0062\U000E0077\U000E006C\U000E0073\U000E007F",  # 🏴 Wales
+}
+
+
+def _wc_flag(team: str | None) -> str:
+    """Return a flag emoji for a national team, or '' if unknown."""
+    iso = WC_TEAM_ISO.get((team or "").strip())
+    if not iso:
+        return ""
+    if iso in WC_SUBDIVISION_FLAG:
+        return WC_SUBDIVISION_FLAG[iso]
+    # Two-letter code → regional indicator symbols (A=0x1F1E6).
+    return "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in iso)
+
+
+# The free TheSportsDB tier doesn't expose the 2026 group draw, so we pin the
+# 12 groups (A–L, 48 teams) here and compute each table from played results.
+# Team names must match TheSportsDB's spelling (see WC_TEAM_ISO keys) for the
+# results to attach; an unmatched name simply won't appear in a table.
+WC_GROUPS = {
+    "A": ["Mexico", "South Africa", "Uzbekistan", "Canada"],
+    "B": ["Canada", "Curaçao", "Scotland", "Qatar"],
+    "C": ["USA", "Paraguay", "Australia", "Haiti"],
+    "D": ["Brazil", "Morocco", "Germany", "South Korea"],
+    "E": ["Netherlands", "Japan", "Belgium", "Egypt"],
+    "F": ["Spain", "Sweden", "Switzerland", "Ivory Coast"],
+    "G": ["Argentina", "Tunisia", "Czech Republic", "Cape Verde"],
+    "H": ["France", "Senegal", "Norway", "Uruguay"],
+    "I": ["England", "Croatia", "Saudi Arabia", "Bosnia-Herzegovina"],
+    "J": ["Portugal", "Colombia", "Austria", "Jordan"],
+    "K": ["Italy", "Ecuador", "Ghana", "New Zealand"],
+    "L": ["Germany", "Panama", "Iran", "Nigeria"],
+}
+
+# Reverse lookup: team name -> group letter (last group wins on duplicates,
+# which only matters for placeholder/qualifier names that repeat).
+WC_TEAM_GROUP = {team: g for g, teams in WC_GROUPS.items() for team in teams}
+
+
+def _wc_get(path: str, params: dict) -> dict:
+    resp = requests.get(f"{WC_API}{path}", params=params, headers=HEADERS, timeout=10)
+    resp.raise_for_status()
+    return resp.json() or {}
+
+
+def _wc_int(value):
+    """Coerce TheSportsDB's stringly-typed numbers, tolerating None/''."""
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _wc_match_status(ev: dict, home_score, away_score) -> str:
+    """Normalize a fixture to upcoming / live / finished.
+
+    `strStatus` is "NS" (not started), "Match Finished"/"FT", or a live code
+    (e.g. "1H", "2H", "HT"). Fall back to scores + kickoff time when it's blank.
+    """
+    raw = (ev.get("strStatus") or "").strip().upper()
+    if raw in ("FT", "MATCH FINISHED", "AET", "PEN"):
+        return "finished"
+    if raw in ("1H", "2H", "HT", "ET", "LIVE", "P"):
+        return "live"
+    if raw == "NS":
+        return "upcoming"
+
+    # No usable status: infer from scores, then from kickoff time.
+    if home_score is not None and away_score is not None:
+        return "finished"
+    ts = _padel_parse_utc(ev.get("strTimestamp"))
+    if ts:
+        # strTimestamp is naive UTC-ish; compare against now in UTC.
+        now = datetime.now(timezone.utc)
+        return "upcoming" if ts.replace(tzinfo=timezone.utc) > now else "finished"
+    return "upcoming"
+
+
+def _wc_normalize_match(ev: dict) -> dict:
+    home_score = _wc_int(ev.get("intHomeScore"))
+    away_score = _wc_int(ev.get("intAwayScore"))
+    status = _wc_match_status(ev, home_score, away_score)
+    return {
+        "match_id": ev.get("idEvent"),
+        "date": ev.get("dateEvent"),
+        "time": (ev.get("strTime") or "")[:5],  # "HH:MM"
+        "timestamp": ev.get("strTimestamp"),
+        "round": _wc_int(ev.get("intRound")),
+        "home": ev.get("strHomeTeam"),
+        "away": ev.get("strAwayTeam"),
+        "home_flag": _wc_flag(ev.get("strHomeTeam")),
+        "away_flag": _wc_flag(ev.get("strAwayTeam")),
+        "home_score": home_score,
+        "away_score": away_score,
+        "status": status,
+        "venue": ev.get("strVenue"),
+        "country": ev.get("strCountry"),
+        "postponed": (ev.get("strPostponed") or "").lower() == "yes",
+    }
+
+
+def get_wc_matches() -> dict:
+    """Return World Cup fixtures+results grouped by day (chronological).
+
+    Each day already includes any played scores, so selecting a past day in the
+    UI shows that day's results without an extra request.
+    """
+    data = _wc_get("/eventsseason.php", {"id": WC_LEAGUE_ID, "s": WC_SEASON})
+    events = data.get("events") or []
+
+    days: dict = {}
+    for ev in events:
+        m = _wc_normalize_match(ev)
+        days.setdefault(m["date"] or "?", []).append(m)
+
+    # Within a day, order by kickoff time then home team for a stable read.
+    for day_matches in days.values():
+        day_matches.sort(key=lambda x: (x.get("time") or "99:99", x.get("home") or ""))
+
+    return {
+        "season": WC_SEASON,
+        "days": [{"date": d, "matches": days[d]} for d in sorted(days.keys())],
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _wc_blank_row(team: str) -> dict:
+    return {
+        "team": team, "flag": _wc_flag(team),
+        "played": 0, "win": 0, "draw": 0, "loss": 0,
+        "gf": 0, "ga": 0, "gd": 0, "points": 0,
+    }
+
+
+def get_wc_standings() -> dict:
+    """Build the 12 group tables from the played group-stage results.
+
+    The free TheSportsDB tier doesn't expose the group draw, so we seed each
+    group from WC_GROUPS and accumulate played fixtures into it. Only finished
+    matches with both scores count; teams start at zero so the tables show even
+    before a ball is kicked.
+    """
+    matches_data = get_wc_matches()
+    all_matches = [m for d in matches_data["days"] for m in d["matches"]]
+
+    # Seed every group with its teams at zero.
+    tables: dict = {g: {t: _wc_blank_row(t) for t in teams} for g, teams in WC_GROUPS.items()}
+
+    for m in all_matches:
+        if m["status"] != "finished" or m["home_score"] is None or m["away_score"] is None:
+            continue
+        group = WC_TEAM_GROUP.get(m["home"]) or WC_TEAM_GROUP.get(m["away"])
+        # Only score it as a group match when both teams share the same group.
+        if not group or WC_TEAM_GROUP.get(m["home"]) != WC_TEAM_GROUP.get(m["away"]):
+            continue
+        hs, as_ = m["home_score"], m["away_score"]
+        home, away = tables[group][m["home"]], tables[group][m["away"]]
+        for row, gf, ga in ((home, hs, as_), (away, as_, hs)):
+            row["played"] += 1
+            row["gf"] += gf
+            row["ga"] += ga
+            row["gd"] = row["gf"] - row["ga"]
+        if hs > as_:
+            home["win"] += 1; home["points"] += 3; away["loss"] += 1
+        elif hs < as_:
+            away["win"] += 1; away["points"] += 3; home["loss"] += 1
+        else:
+            home["draw"] += 1; away["draw"] += 1
+            home["points"] += 1; away["points"] += 1
+
+    # Rank each group: points, then goal difference, then goals for.
+    groups_out = []
+    for g in sorted(tables.keys()):
+        table = sorted(
+            tables[g].values(),
+            key=lambda r: (-r["points"], -r["gd"], -r["gf"], r["team"]),
+        )
+        for i, row in enumerate(table, 1):
+            row["rank"] = i
+        groups_out.append({"name": f"Grupo {g}", "table": table})
+
+    return {
+        "season": WC_SEASON,
+        "groups": groups_out,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 # --- In-memory cache ---
 
 _cache: dict = {"data": None, "ts": 0.0}
@@ -354,6 +587,13 @@ _padel_schedule_cache: dict = {}  # slug -> {"data": ..., "ts": ...}
 _padel_lock = asyncio.Lock()
 PADEL_TOURNAMENTS_TTL = 3600  # 1 hour — the calendar rarely changes
 PADEL_SCHEDULE_TTL = 300  # 5 minutes — live scores move fast
+
+# World Cup caches: full-season fixtures (with results) and standings.
+_wc_matches_cache: dict = {"data": None, "ts": 0.0}
+_wc_standings_cache: dict = {"data": None, "ts": 0.0}
+_wc_lock = asyncio.Lock()
+WC_MATCHES_TTL = 300  # 5 minutes — live scores move fast
+WC_STANDINGS_TTL = 900  # 15 minutes — tables update less often
 
 
 # --- FastAPI app ---
@@ -497,6 +737,53 @@ async def padel_schedule(slug: str = Query(...)):
                 logger.warning("Returning stale padel schedule after failure")
                 return c["data"]
             raise HTTPException(status_code=500, detail="No se pudo cargar el cuadro de partidos.")
+
+
+@app.get("/api/wc/matches")
+async def wc_matches():
+    now = time.time()
+    c = _wc_matches_cache
+    if c["data"] and (now - c["ts"]) < WC_MATCHES_TTL:
+        return c["data"]
+    async with _wc_lock:
+        now = time.time()
+        if c["data"] and (now - c["ts"]) < WC_MATCHES_TTL:
+            return c["data"]
+        try:
+            data = await asyncio.to_thread(get_wc_matches)
+            c["data"], c["ts"] = data, now
+            total = sum(len(d["matches"]) for d in data["days"])
+            logger.info(f"World Cup: {len(data['days'])} days, {total} matches")
+            return data
+        except Exception as e:
+            logger.error(f"World Cup matches fetch failed: {e}")
+            if c["data"]:
+                logger.warning("Returning stale World Cup matches after failure")
+                return c["data"]
+            raise HTTPException(status_code=500, detail="No se pudo cargar el calendario del Mundial.")
+
+
+@app.get("/api/wc/standings")
+async def wc_standings():
+    now = time.time()
+    c = _wc_standings_cache
+    if c["data"] and (now - c["ts"]) < WC_STANDINGS_TTL:
+        return c["data"]
+    async with _wc_lock:
+        now = time.time()
+        if c["data"] and (now - c["ts"]) < WC_STANDINGS_TTL:
+            return c["data"]
+        try:
+            data = await asyncio.to_thread(get_wc_standings)
+            c["data"], c["ts"] = data, now
+            logger.info(f"World Cup standings: {len(data['groups'])} groups")
+            return data
+        except Exception as e:
+            logger.error(f"World Cup standings fetch failed: {e}")
+            if c["data"]:
+                logger.warning("Returning stale World Cup standings after failure")
+                return c["data"]
+            raise HTTPException(status_code=500, detail="No se pudo cargar la clasificación del Mundial.")
 
 
 @app.get("/api/health")

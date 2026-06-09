@@ -8,7 +8,79 @@ const ORDER_VERSION_KEY = "sports-tv-filter-order-version";
 
 let allEvents = [];
 let activeFilter = null; // null = no sport selected → show all sports
-let activeDateFilter = null; // null = no day selected → show all days
+
+// --- Shared day filter (coordinates TV + World Cup) ---
+//
+// One day bar at the top of the page drives every section. Days are keyed by
+// ISO date (YYYY-MM-DD) so the Spanish TV dates and the ISO World Cup dates can
+// share a single selection. Each section registers the ISO days it has and a
+// re-render callback; selecting a day re-renders all of them.
+
+const MONTHS_ES_NUM = {
+  enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6,
+  julio: 7, agosto: 8, septiembre: 9, octubre: 10, noviembre: 11, diciembre: 12,
+};
+
+// "Lunes 8 de Junio de 2026" -> "2026-06-08"; returns "" if unparseable.
+function tvDateToISO(dateStr) {
+  const parts = (dateStr || "").toLowerCase().split(" ");
+  const day = parseInt(parts[1], 10);
+  const month = MONTHS_ES_NUM[parts[3]];
+  const year = parseInt(parts[5], 10) || new Date().getFullYear();
+  if (!day || !month) return "";
+  const pad = n => String(n).padStart(2, "0");
+  return `${year}-${pad(month)}-${pad(day)}`;
+}
+
+function todayISO() {
+  const n = new Date();
+  const pad = x => String(x).padStart(2, "0");
+  return `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())}`;
+}
+
+let globalDateISO = null; // null = no day selected → every section shows all days
+const dateSources = []; // [{ getDays: () => isoDate[], render: () => void }]
+
+function registerDateSource(source) {
+  dateSources.push(source);
+}
+
+let globalDateDefaulted = false; // only auto-pick the default day once
+
+function buildGlobalDateBar() {
+  const bar = document.getElementById("global-date-bar");
+  if (!bar) return;
+
+  // Union of every section's ISO days, sorted chronologically.
+  const days = [...new Set(dateSources.flatMap(s => s.getDays()))].filter(Boolean).sort();
+  if (!days.length) { bar.innerHTML = ""; return; }
+
+  const today = todayISO();
+
+  // On first populated build, land on today (or the next available day) so the
+  // page opens focused, just like the old per-section default.
+  if (!globalDateDefaulted) {
+    globalDateDefaulted = true;
+    globalDateISO = days.includes(today) ? today : (days.find(d => d > today) || null);
+    dateSources.forEach(s => s.render());
+  }
+  bar.innerHTML = days.map(iso => {
+    const label = iso === today
+      ? "Hoy"
+      : new Date(iso + "T00:00:00").toLocaleDateString("es-ES", { weekday: "short", day: "numeric" });
+    return `<button class="filter-chip ${iso === globalDateISO ? "active" : ""}" data-date="${iso}">${label}</button>`;
+  }).join("");
+
+  bar.querySelectorAll(".filter-chip").forEach(btn => {
+    btn.addEventListener("click", () => {
+      // Tapping the active chip deselects it → all days.
+      globalDateISO = btn.dataset.date === globalDateISO ? null : btn.dataset.date;
+      bar.querySelectorAll(".filter-chip").forEach(b => b.classList.remove("active"));
+      if (globalDateISO !== null) btn.classList.add("active");
+      dateSources.forEach(s => s.render());
+    });
+  });
+}
 
 function getSavedOrder() {
   try {
@@ -69,13 +141,15 @@ async function fetchEvents() {
     }
 
     allEvents = data.events;
+    // Cache each event's ISO date so the shared day filter can match it.
+    allEvents.forEach(e => { e._iso = tvDateToISO(e.date); });
     document.getElementById("date-label").textContent = data.date;
     document.getElementById("last-updated").textContent = isOffline
       ? `Sin conexión — mostrando programación guardada (${new Date(data.scraped_at).toLocaleTimeString("es-ES")})`
       : `Actualizado: ${new Date(data.scraped_at).toLocaleTimeString("es-ES")}`;
 
-    buildDateFilters(allEvents, data.date);
     buildFilters(allEvents);
+    buildGlobalDateBar();
     renderEvents(allEvents, activeFilter);
   } catch (err) {
     container.innerHTML = `<div class="error-msg">\u274C Error al cargar datos.<br/><small>${err.message}</small></div>`;
@@ -127,7 +201,7 @@ function handleDrop(e) {
   saveOrder(newOrder);
 
   // Re-render events in new sport order
-  renderEvents(allEvents, activeFilter, activeDateFilter);
+  renderEvents(allEvents, activeFilter);
 }
 
 function handleDragEnd() {
@@ -199,7 +273,7 @@ function handleTouchEnd(e) {
     const newOrder = [...bar.querySelectorAll(".filter-chip[draggable]")]
       .map(c => c.dataset.sport);
     saveOrder(newOrder);
-    renderEvents(allEvents, activeFilter, activeDateFilter);
+    renderEvents(allEvents, activeFilter);
   }
 
   touchSrcEl.classList.remove("dragging");
@@ -208,35 +282,6 @@ function handleTouchEnd(e) {
   touchSrcEl = null;
 }
 
-// --- Date filter ---
-
-function buildDateFilters(events, todayDate) {
-  const bar = document.getElementById("date-bar");
-  const dates = [...new Set(events.map(e => e.date))];
-
-  const labels = dates.map(d => {
-    if (d === todayDate) return { label: "Hoy", value: d };
-    // Extract just "Viernes 13" style short label
-    const parts = d.split(" ");
-    const short = parts.slice(0, 2).join(" ");
-    return { label: short, value: d };
-  });
-
-  bar.innerHTML = labels.map(({ label, value }) => {
-    const isActive = value === activeDateFilter;
-    return `<button class="filter-chip ${isActive ? "active" : ""}" data-date="${value}">${label}</button>`;
-  }).join("");
-
-  bar.querySelectorAll(".filter-chip").forEach(btn => {
-    btn.addEventListener("click", () => {
-      // Tapping the active chip deselects it → back to showing all days
-      activeDateFilter = btn.dataset.date === activeDateFilter ? null : btn.dataset.date;
-      bar.querySelectorAll(".filter-chip").forEach(b => b.classList.remove("active"));
-      if (activeDateFilter !== null) btn.classList.add("active");
-      renderEvents(allEvents, activeFilter);
-    });
-  });
-}
 
 // --- Build filters ---
 
@@ -256,7 +301,7 @@ function buildFilters(events) {
       activeFilter = btn.dataset.sport === activeFilter ? null : btn.dataset.sport;
       bar.querySelectorAll(".filter-chip").forEach(b => b.classList.remove("active"));
       if (activeFilter !== null) btn.classList.add("active");
-      renderEvents(allEvents, activeFilter, activeDateFilter);
+      renderEvents(allEvents, activeFilter);
     });
   });
 
@@ -320,15 +365,16 @@ function renderSportGroups(events) {
 function renderEvents(events, sportFilter) {
   const container = document.getElementById("events-container");
 
-  const dateValue = activeDateFilter; // null = show all days
+  const dateValue = globalDateISO; // null = show all days (shared filter)
 
   let filtered = !sportFilter ? events : events.filter(e => e.sport === sportFilter);
   if (dateValue) {
-    filtered = filtered.filter(e => e.date === dateValue);
+    filtered = filtered.filter(e => e._iso === dateValue);
   }
 
   if (filtered.length === 0) {
-    container.innerHTML = '<div class="no-results">No hay eventos para este filtro.</div>';
+    container.innerHTML = '<div class="no-results">No hay nada en TV para este filtro.</div>';
+    buildQuickNav();
     return;
   }
 
@@ -380,7 +426,12 @@ function buildQuickNav() {
     });
   }
 
-  // Always offer a jump to the Padel section at the bottom of the list
+  // Always offer jumps to the World Cup and Padel sections at the bottom.
+  const wcSection = document.getElementById("sec-wc");
+  if (wcSection) {
+    items.push({ label: "🏆 Mundial", el: wcSection });
+  }
+
   const padelSection = document.getElementById("sec-padel");
   if (padelSection) {
     items.push({ label: "🎾 Pádel", el: padelSection });
@@ -538,6 +589,7 @@ document.getElementById("events-container").addEventListener("click", e => {
 
 document.getElementById("refresh-btn").addEventListener("click", () => {
   fetchEvents();
+  if (typeof fetchWorldCup === "function") fetchWorldCup();
   if (typeof fetchPadelTournaments === "function") fetchPadelTournaments();
 });
 
@@ -563,5 +615,12 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js").catch(console.error);
   });
 }
+
+// The TV section contributes its ISO days to the shared bar and re-renders on
+// day selection. (World Cup registers itself from worldcup.js.)
+registerDateSource({
+  getDays: () => [...new Set(allEvents.map(e => e._iso))],
+  render: () => renderEvents(allEvents, activeFilter),
+});
 
 fetchEvents();
