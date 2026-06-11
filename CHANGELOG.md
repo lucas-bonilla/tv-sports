@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **World Cup kickoff times in Spanish time**: fixtures from TheSportsDB (UTC) are converted to Europe/Madrid, recomputing the day too so a kickoff that crosses midnight is filed under the correct local date
+- **Broadcasting channel on World Cup matches**: each fixture is cross-referenced against Marca's TV schedule by date + team names (EN→ES name map) to attach the channel when it's listed; shown on the match card and used when adding to the calendar
 - **Padel tracking** via the Premier Padel (Qatar Airways Premier Padel Tour) API:
   - `/api/padel/tournaments` — season calendar of all tournaments with normalized status (live/upcoming/finished), category, country, dates, and prize money
   - `/api/padel/schedule?slug=<slug>` — order of play for a tournament, grouped by day then court, with teams, set scores, round, and live/completed status
