@@ -633,7 +633,14 @@ def get_wc_matches() -> dict:
     days: dict = {}
     for ev in events:
         m = _wc_normalize_match(ev)
-        m["channel"] = _wc_lookup_channel(m, channel_index)
+        channel = _wc_lookup_channel(m, channel_index)
+        # DAZN holds the full World Cup rights in Spain; RTVE (La 1) only carries a
+        # subset. So when Marca doesn't list the match on an open channel, fall
+        # back to DAZN — but only for matches still to come (a played result
+        # doesn't need a broadcaster).
+        if not channel and m.get("status") != "finished":
+            channel = "DAZN MUNDIAL"
+        m["channel"] = channel
         days.setdefault(m["date"] or "?", []).append(m)
 
     # Within a day, order by kickoff time then home team for a stable read.
