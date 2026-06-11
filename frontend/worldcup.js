@@ -106,10 +106,11 @@ function renderWcMatch(m) {
   const done = m.status === "finished";
   const hasScore = m.home_score !== null && m.away_score !== null;
 
-  // Center column: score for played/live matches, kickoff time for upcoming.
-  const centre = (live || done) && hasScore
-    ? `<span class="wc-score ${live ? "wc-score--live" : ""}">${m.home_score} - ${m.away_score}</span>`
-    : `<span class="wc-kickoff">${m.time || "—"}</span>`;
+  // Left column: kickoff time for upcoming, final/live score for played matches —
+  // mirrors the TV-schedule card where the time sits to the left of the title.
+  const lead = (live || done) && hasScore
+    ? `<span class="wc-time-score ${live ? "wc-time-score--live" : ""}">${m.home_score}-${m.away_score}</span>`
+    : (m.time || "—");
 
   const statusBadge = live
     ? '<span class="wc-badge wc-badge--live">● EN JUEGO</span>'
@@ -126,27 +127,23 @@ function renderWcMatch(m) {
   const winA = done && hasScore && m.home_score > m.away_score;
   const winB = done && hasScore && m.away_score > m.home_score;
 
-  const meta = [
-    Number.isFinite(m.round) ? `Jornada ${m.round}` : "",
-    m.venue || "",
-  ].filter(Boolean).join(" · ");
+  // Single-line title "Home 🏳 - 🏴 Away", with the winner emphasised.
+  const title = `<span class="${winA ? "wc-won" : ""}">${m.home}</span>${wcFlag(m.home_flag)}`
+    + ` - ${wcFlag(m.away_flag)}<span class="${winB ? "wc-won" : ""}">${m.away}</span>`;
+
+  const competition = Number.isFinite(m.round) ? `Jornada ${m.round}` : "Mundial";
 
   return `
-    <div class="wc-match ${live ? "wc-match--live" : ""} ${done ? "wc-match--done" : ""} ${addable ? "wc-match--addable" : ""}"
+    <div class="event-card wc-card ${live ? "wc-card--live" : ""} ${done ? "wc-card--done" : ""}"
       ${addable ? `data-wc-event="${payload}" role="button" tabindex="0" title="Añadir al calendario"` : ""}>
-      <div class="wc-match-row">
-        <span class="wc-team wc-team--home ${winA ? "wc-team--won" : ""}">
-          <span class="wc-team-name">${m.home}</span>${wcFlag(m.home_flag)}
-        </span>
-        <span class="wc-centre">${centre}</span>
-        <span class="wc-team wc-team--away ${winB ? "wc-team--won" : ""}">
-          ${wcFlag(m.away_flag)}<span class="wc-team-name">${m.away}</span>
-        </span>
-      </div>
-      <div class="wc-match-foot">
-        ${statusBadge}
-        ${meta ? `<span class="wc-meta">${meta}</span>` : ""}
-        ${m.channel ? `<span class="wc-channel">📺 ${m.channel}</span>` : ""}
+      <div class="event-time">${lead}</div>
+      <div class="event-body">
+        <div class="event-match">${title}</div>
+        <div class="event-meta">
+          ${statusBadge}
+          <span class="event-competition">${competition}</span>
+          ${m.channel ? `<span class="event-channel">${m.channel}</span>` : ""}
+        </div>
       </div>
     </div>`;
 }
