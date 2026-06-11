@@ -1,6 +1,6 @@
-const STATIC_CACHE = "sports-tv-static-v20";
+const STATIC_CACHE = "sports-tv-static-v21";
 const API_CACHE = "sports-tv-api-v1";
-const STATIC = ["/", "/index.html", "/style.css", "/app.js", "/padel.js", "/manifest.json"];
+const STATIC = ["/", "/index.html", "/style.css", "/app.js", "/padel.js", "/worldcup.js", "/manifest.json"];
 
 self.addEventListener("install", e => {
   e.waitUntil(
