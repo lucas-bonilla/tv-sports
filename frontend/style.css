@@ -886,6 +886,12 @@ main {
   font-size: 0.72rem;
   color: var(--muted);
 }
+.wc-channel {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--accent, #3fb950);
+  margin-left: auto;
+}
 
 .wc-badge {
   font-size: 0.62rem;

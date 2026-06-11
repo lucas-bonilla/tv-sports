@@ -4,9 +4,20 @@ from fastapi.responses import Response
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import asyncio
 import logging
 import time
+import unicodedata
+
+# All user-facing schedules are for a Spanish audience, so kickoff times and the
+# day a match is filed under are expressed in Europe/Madrid (handles CEST/CET DST).
+MADRID_TZ = ZoneInfo("Europe/Madrid")
+
+
+def _strip_accents(s: str) -> str:
+    s = unicodedata.normalize("NFKD", s or "")
+    return "".join(c for c in s if not unicodedata.combining(c)).lower().strip()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -465,14 +476,42 @@ def _wc_match_status(ev: dict, home_score, away_score) -> str:
     return "upcoming"
 
 
+def _wc_local_datetime(ev: dict) -> tuple:
+    """Convert a fixture's kickoff to Europe/Madrid.
+
+    TheSportsDB reports dateEvent/strTime in UTC and also gives strTimestamp.
+    We anchor on the UTC instant and re-express it in Madrid time, which can roll
+    the local date forward/back (a 23:00 UTC kickoff is 01:00 next day in Spain).
+    Returns (date 'YYYY-MM-DD', time 'HH:MM'); falls back to the raw UTC values if
+    no timestamp is available.
+    """
+    raw_date = ev.get("dateEvent")
+    raw_time = (ev.get("strTime") or "")[:5]
+
+    ts = _padel_parse_utc(ev.get("strTimestamp"))
+    if ts is None and raw_date and raw_time:
+        try:
+            ts = datetime.fromisoformat(f"{raw_date}T{raw_time}:00")
+        except ValueError:
+            ts = None
+    if ts is None:
+        return raw_date, raw_time
+
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    local = ts.astimezone(MADRID_TZ)
+    return local.strftime("%Y-%m-%d"), local.strftime("%H:%M")
+
+
 def _wc_normalize_match(ev: dict) -> dict:
     home_score = _wc_int(ev.get("intHomeScore"))
     away_score = _wc_int(ev.get("intAwayScore"))
     status = _wc_match_status(ev, home_score, away_score)
+    local_date, local_time = _wc_local_datetime(ev)
     return {
         "match_id": ev.get("idEvent"),
-        "date": ev.get("dateEvent"),
-        "time": (ev.get("strTime") or "")[:5],  # "HH:MM"
+        "date": local_date,
+        "time": local_time,  # "HH:MM" in Europe/Madrid
         "timestamp": ev.get("strTimestamp"),
         "round": _wc_int(ev.get("intRound")),
         "home": ev.get("strHomeTeam"),
@@ -485,7 +524,97 @@ def _wc_normalize_match(ev: dict) -> dict:
         "venue": ev.get("strVenue"),
         "country": ev.get("strCountry"),
         "postponed": (ev.get("strPostponed") or "").lower() == "yes",
+        "channel": None,  # filled from Marca's TV schedule when the match is listed
     }
+
+
+# TheSportsDB names teams in English; Marca's TV schedule uses Spanish. Map the
+# nations so we can cross-reference the two and attach the broadcasting channel.
+WC_TEAM_ES = {
+    "Argentina": "Argentina", "Australia": "Australia", "Austria": "Austria",
+    "Belgium": "Bélgica", "Bolivia": "Bolivia", "Bosnia-Herzegovina": "Bosnia",
+    "Brazil": "Brasil", "Cameroon": "Camerún", "Canada": "Canadá",
+    "Cape Verde": "Cabo Verde", "Chile": "Chile", "Colombia": "Colombia",
+    "Costa Rica": "Costa Rica", "Croatia": "Croacia", "Curaçao": "Curazao",
+    "Czech Republic": "República Checa", "Denmark": "Dinamarca", "DR Congo": "Congo",
+    "Ecuador": "Ecuador", "Egypt": "Egipto", "England": "Inglaterra",
+    "France": "Francia", "Germany": "Alemania", "Ghana": "Ghana", "Greece": "Grecia",
+    "Haiti": "Haití", "Honduras": "Honduras", "Hungary": "Hungría", "Iran": "Irán",
+    "Italy": "Italia", "Ivory Coast": "Costa de Marfil", "Jamaica": "Jamaica",
+    "Japan": "Japón", "Jordan": "Jordania", "Mexico": "México", "Morocco": "Marruecos",
+    "Netherlands": "Países Bajos", "New Zealand": "Nueva Zelanda", "Nigeria": "Nigeria",
+    "Norway": "Noruega", "Panama": "Panamá", "Paraguay": "Paraguay", "Peru": "Perú",
+    "Poland": "Polonia", "Portugal": "Portugal", "Qatar": "Catar",
+    "Republic of Ireland": "Irlanda", "Romania": "Rumanía", "Saudi Arabia": "Arabia Saudí",
+    "Scotland": "Escocia", "Senegal": "Senegal", "Serbia": "Serbia",
+    "Slovakia": "Eslovaquia", "Slovenia": "Eslovenia", "South Africa": "Sudáfrica",
+    "South Korea": "Corea del Sur", "Spain": "España", "Sweden": "Suecia",
+    "Switzerland": "Suiza", "Tunisia": "Túnez", "Turkey": "Turquía",
+    "Ukraine": "Ucrania", "Uruguay": "Uruguay", "USA": "Estados Unidos",
+    "Uzbekistan": "Uzbekistán", "Venezuela": "Venezuela", "Wales": "Gales",
+}
+
+
+def _es_date_to_iso(date_str: str) -> str | None:
+    """Turn a Marca Spanish date label ('Jueves 11 de Junio') into 'YYYY-MM-DD'."""
+    parts = (date_str or "").lower().split()
+    try:
+        day = int(parts[1])
+        month = MONTHS_ES.get(parts[3])
+        year = int(parts[5]) if len(parts) >= 6 else datetime.now().year
+    except (IndexError, ValueError):
+        return None
+    if not month:
+        return None
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def _wc_channel_index() -> list:
+    """Scrape Marca's TV schedule and index its World Cup football listings.
+
+    Returns a list of (iso_date, normalized_match_text, channel). Marca only
+    covers the current week, so only near-term matches get a channel — which is
+    exactly the "if available" behaviour we want. A scrape failure is non-fatal:
+    matches simply render without a channel.
+    """
+    # Reuse the /api/events cache when it's warm so we don't scrape Marca twice;
+    # only fall back to a fresh scrape when it's empty or stale.
+    now = time.time()
+    if _cache["data"] and (now - _cache["ts"]) < CACHE_TTL:
+        data = _cache["data"]
+    else:
+        try:
+            data = scrape_events()
+        except Exception as e:
+            logger.warning(f"Marca scrape for World Cup channels failed: {e}")
+            return []
+
+    index = []
+    for ev in data.get("events", []):
+        if ev.get("emoji") != "⚽":
+            continue
+        if "mundial" not in _strip_accents(ev.get("competition")):
+            continue
+        iso = _es_date_to_iso(ev.get("date"))
+        text = _strip_accents(ev.get("match"))
+        channel = (ev.get("channel") or "").strip()
+        if iso and text and channel:
+            index.append((iso, text, channel))
+    return index
+
+
+def _wc_lookup_channel(m: dict, index: list) -> str | None:
+    """Find the broadcasting channel for a match by date + both team names."""
+    if not index or not m.get("date"):
+        return None
+    home = _strip_accents(WC_TEAM_ES.get(m.get("home"), m.get("home") or ""))
+    away = _strip_accents(WC_TEAM_ES.get(m.get("away"), m.get("away") or ""))
+    if not home or not away:
+        return None
+    for iso, text, channel in index:
+        if iso == m["date"] and home in text and away in text:
+            return channel
+    return None
 
 
 def get_wc_matches() -> dict:
@@ -497,9 +626,12 @@ def get_wc_matches() -> dict:
     data = _wc_get("/eventsseason.php", {"id": WC_LEAGUE_ID, "s": WC_SEASON})
     events = data.get("events") or []
 
+    channel_index = _wc_channel_index()
+
     days: dict = {}
     for ev in events:
         m = _wc_normalize_match(ev)
+        m["channel"] = _wc_lookup_channel(m, channel_index)
         days.setdefault(m["date"] or "?", []).append(m)
 
     # Within a day, order by kickoff time then home team for a stable read.

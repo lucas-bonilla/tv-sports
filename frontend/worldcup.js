@@ -146,6 +146,7 @@ function renderWcMatch(m) {
       <div class="wc-match-foot">
         ${statusBadge}
         ${meta ? `<span class="wc-meta">${meta}</span>` : ""}
+        ${m.channel ? `<span class="wc-channel">📺 ${m.channel}</span>` : ""}
       </div>
     </div>`;
 }
@@ -228,7 +229,7 @@ function wcEventForCalendar(m) {
     date: `mundial ${d} de ${WC_MONTHS_ES[mo - 1]}`, // parser reads parts[1]=day, parts[3]=month
     time: m.time,
     competition: ["Mundial 2026", Number.isFinite(m.round) ? `Jornada ${m.round}` : ""].filter(Boolean).join(" · "),
-    channel: m.venue || "",
+    channel: m.channel || m.venue || "",
   };
 }
 
