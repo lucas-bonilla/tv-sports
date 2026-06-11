@@ -593,7 +593,9 @@ def _wc_channel_index() -> list:
     for ev in data.get("events", []):
         if ev.get("emoji") != "⚽":
             continue
-        if "mundial" not in _strip_accents(ev.get("competition")):
+        # Marca labels the World Cup "Campeonato del Mundo" (and sometimes
+        # "Mundial"); "mund" matches both while still excluding club football.
+        if "mund" not in _strip_accents(ev.get("competition")):
             continue
         iso = _es_date_to_iso(ev.get("date"))
         text = _strip_accents(ev.get("match"))
