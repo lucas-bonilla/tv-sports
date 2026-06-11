@@ -89,12 +89,12 @@ function renderWcMatches() {
 
   // Future matches are addable to a calendar; reuse the shared modal.
   container.onclick = e => {
-    const card = e.target.closest(".wc-match[data-wc-event]");
+    const card = e.target.closest("[data-wc-event]");
     if (card) openWcCalendar(JSON.parse(decodeURIComponent(card.dataset.wcEvent)));
   };
   container.onkeydown = e => {
     if (e.key !== "Enter" && e.key !== " ") return;
-    const card = e.target.closest(".wc-match[data-wc-event]");
+    const card = e.target.closest("[data-wc-event]");
     if (card) { e.preventDefault(); openWcCalendar(JSON.parse(decodeURIComponent(card.dataset.wcEvent))); }
   };
 
