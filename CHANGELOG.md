@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **World Cup group draw was hand-entered and wrong**: the 12 groups (A–L) are now the official FIFA draw, verified against the round-1 fixtures returned by the API. This also fixes group-stage results being dropped from the standings (e.g. South Korea–Czech Republic) when the two teams were pinned to different groups
+- **World Cup team names now display in Spanish** in both fixtures and standings (was showing TheSportsDB's English names); internal English keys are kept for group membership and Marca channel cross-reference. Added Iraq/Algeria (missing flag + translation) and fixed "RD Congo"
 - Refresh button now also refreshes the padel section; previously the iOS shortcut had to be closed and reopened to get fresh padel data
 
 - iOS calendar flow no longer triggers a two-step share sheet + permission dialog; now opens the native "Add to Calendar" screen in one tap

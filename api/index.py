@@ -372,14 +372,15 @@ WC_SEASON = os.environ.get("WC_SEASON", "2026")
 # a flag emoji instead of the federation crest. Covers every nation that can
 # realistically appear at the 2026 World Cup (48 teams) plus common qualifiers.
 WC_TEAM_ISO = {
-    "Argentina": "AR", "Australia": "AU", "Austria": "AT", "Belgium": "BE",
-    "Bolivia": "BO", "Bosnia-Herzegovina": "BA", "Brazil": "BR", "Cameroon": "CM",
-    "Canada": "CA", "Cape Verde": "CV", "Chile": "CL", "Colombia": "CO",
-    "Costa Rica": "CR", "Croatia": "HR", "Curaçao": "CW", "Czech Republic": "CZ",
-    "Denmark": "DK", "DR Congo": "CD", "Ecuador": "EC", "Egypt": "EG",
-    "England": "GB-ENG", "France": "FR", "Germany": "DE", "Ghana": "GH",
-    "Greece": "GR", "Haiti": "HT", "Honduras": "HN", "Hungary": "HU",
-    "Iran": "IR", "Italy": "IT", "Ivory Coast": "CI", "Jamaica": "JM",
+    "Algeria": "DZ", "Argentina": "AR", "Australia": "AU", "Austria": "AT",
+    "Belgium": "BE", "Bolivia": "BO", "Bosnia-Herzegovina": "BA", "Brazil": "BR",
+    "Cameroon": "CM", "Canada": "CA", "Cape Verde": "CV", "Chile": "CL",
+    "Colombia": "CO", "Costa Rica": "CR", "Croatia": "HR", "Curaçao": "CW",
+    "Czech Republic": "CZ", "Denmark": "DK", "DR Congo": "CD", "Ecuador": "EC",
+    "Egypt": "EG", "England": "GB-ENG", "France": "FR", "Germany": "DE",
+    "Ghana": "GH", "Greece": "GR", "Haiti": "HT", "Honduras": "HN",
+    "Hungary": "HU", "Iran": "IR", "Iraq": "IQ", "Italy": "IT",
+    "Ivory Coast": "CI", "Jamaica": "JM",
     "Japan": "JP", "Jordan": "JO", "Mexico": "MX", "Morocco": "MA",
     "Netherlands": "NL", "New Zealand": "NZ", "Nigeria": "NG", "Norway": "NO",
     "Panama": "PA", "Paraguay": "PY", "Peru": "PE", "Poland": "PL",
@@ -412,22 +413,23 @@ def _wc_flag(team: str | None) -> str:
 
 
 # The free TheSportsDB tier doesn't expose the 2026 group draw, so we pin the
-# 12 groups (A–L, 48 teams) here and compute each table from played results.
-# Team names must match TheSportsDB's spelling (see WC_TEAM_ISO keys) for the
-# results to attach; an unmatched name simply won't appear in a table.
+# 12 groups (A–L, 48 teams) here from the official FIFA draw and compute each
+# table from played results. Team names must match TheSportsDB's spelling (see
+# WC_TEAM_ISO keys) for the results to attach; an unmatched name simply won't
+# appear in a table. Verified against the round-1 fixtures returned by the API.
 WC_GROUPS = {
-    "A": ["Mexico", "South Africa", "Uzbekistan", "Canada"],
-    "B": ["Canada", "Curaçao", "Scotland", "Qatar"],
-    "C": ["USA", "Paraguay", "Australia", "Haiti"],
-    "D": ["Brazil", "Morocco", "Germany", "South Korea"],
-    "E": ["Netherlands", "Japan", "Belgium", "Egypt"],
-    "F": ["Spain", "Sweden", "Switzerland", "Ivory Coast"],
-    "G": ["Argentina", "Tunisia", "Czech Republic", "Cape Verde"],
-    "H": ["France", "Senegal", "Norway", "Uruguay"],
-    "I": ["England", "Croatia", "Saudi Arabia", "Bosnia-Herzegovina"],
-    "J": ["Portugal", "Colombia", "Austria", "Jordan"],
-    "K": ["Italy", "Ecuador", "Ghana", "New Zealand"],
-    "L": ["Germany", "Panama", "Iran", "Nigeria"],
+    "A": ["Mexico", "South Africa", "South Korea", "Czech Republic"],
+    "B": ["Canada", "Bosnia-Herzegovina", "Qatar", "Switzerland"],
+    "C": ["Brazil", "Morocco", "Haiti", "Scotland"],
+    "D": ["USA", "Paraguay", "Australia", "Turkey"],
+    "E": ["Germany", "Curaçao", "Ivory Coast", "Ecuador"],
+    "F": ["Netherlands", "Japan", "Sweden", "Tunisia"],
+    "G": ["Belgium", "Egypt", "Iran", "New Zealand"],
+    "H": ["Spain", "Cape Verde", "Saudi Arabia", "Uruguay"],
+    "I": ["France", "Senegal", "Iraq", "Norway"],
+    "J": ["Argentina", "Algeria", "Austria", "Jordan"],
+    "K": ["Portugal", "DR Congo", "Uzbekistan", "Colombia"],
+    "L": ["England", "Croatia", "Ghana", "Panama"],
 }
 
 # Reverse lookup: team name -> group letter (last group wins on duplicates,
@@ -504,6 +506,8 @@ def _wc_local_datetime(ev: dict) -> tuple:
 
 
 def _wc_normalize_match(ev: dict) -> dict:
+    home_en = ev.get("strHomeTeam")
+    away_en = ev.get("strAwayTeam")
     home_score = _wc_int(ev.get("intHomeScore"))
     away_score = _wc_int(ev.get("intAwayScore"))
     status = _wc_match_status(ev, home_score, away_score)
@@ -514,10 +518,14 @@ def _wc_normalize_match(ev: dict) -> dict:
         "time": local_time,  # "HH:MM" in Europe/Madrid
         "timestamp": ev.get("strTimestamp"),
         "round": _wc_int(ev.get("intRound")),
-        "home": ev.get("strHomeTeam"),
-        "away": ev.get("strAwayTeam"),
-        "home_flag": _wc_flag(ev.get("strHomeTeam")),
-        "away_flag": _wc_flag(ev.get("strAwayTeam")),
+        # Display names in Spanish; *_en keep TheSportsDB's English spelling for
+        # internal lookups (group membership, Marca channel cross-reference).
+        "home": WC_TEAM_ES.get(home_en, home_en),
+        "away": WC_TEAM_ES.get(away_en, away_en),
+        "home_en": home_en,
+        "away_en": away_en,
+        "home_flag": _wc_flag(home_en),
+        "away_flag": _wc_flag(away_en),
         "home_score": home_score,
         "away_score": away_score,
         "status": status,
@@ -531,16 +539,17 @@ def _wc_normalize_match(ev: dict) -> dict:
 # TheSportsDB names teams in English; Marca's TV schedule uses Spanish. Map the
 # nations so we can cross-reference the two and attach the broadcasting channel.
 WC_TEAM_ES = {
-    "Argentina": "Argentina", "Australia": "Australia", "Austria": "Austria",
-    "Belgium": "Bélgica", "Bolivia": "Bolivia", "Bosnia-Herzegovina": "Bosnia",
-    "Brazil": "Brasil", "Cameroon": "Camerún", "Canada": "Canadá",
-    "Cape Verde": "Cabo Verde", "Chile": "Chile", "Colombia": "Colombia",
-    "Costa Rica": "Costa Rica", "Croatia": "Croacia", "Curaçao": "Curazao",
-    "Czech Republic": "República Checa", "Denmark": "Dinamarca", "DR Congo": "Congo",
-    "Ecuador": "Ecuador", "Egypt": "Egipto", "England": "Inglaterra",
-    "France": "Francia", "Germany": "Alemania", "Ghana": "Ghana", "Greece": "Grecia",
-    "Haiti": "Haití", "Honduras": "Honduras", "Hungary": "Hungría", "Iran": "Irán",
-    "Italy": "Italia", "Ivory Coast": "Costa de Marfil", "Jamaica": "Jamaica",
+    "Algeria": "Argelia", "Argentina": "Argentina", "Australia": "Australia",
+    "Austria": "Austria", "Belgium": "Bélgica", "Bolivia": "Bolivia",
+    "Bosnia-Herzegovina": "Bosnia", "Brazil": "Brasil", "Cameroon": "Camerún",
+    "Canada": "Canadá", "Cape Verde": "Cabo Verde", "Chile": "Chile",
+    "Colombia": "Colombia", "Costa Rica": "Costa Rica", "Croatia": "Croacia",
+    "Curaçao": "Curazao", "Czech Republic": "República Checa", "Denmark": "Dinamarca",
+    "DR Congo": "RD Congo", "Ecuador": "Ecuador", "Egypt": "Egipto",
+    "England": "Inglaterra", "France": "Francia", "Germany": "Alemania",
+    "Ghana": "Ghana", "Greece": "Grecia", "Haiti": "Haití", "Honduras": "Honduras",
+    "Hungary": "Hungría", "Iran": "Irán", "Iraq": "Irak", "Italy": "Italia",
+    "Ivory Coast": "Costa de Marfil", "Jamaica": "Jamaica",
     "Japan": "Japón", "Jordan": "Jordania", "Mexico": "México", "Morocco": "Marruecos",
     "Netherlands": "Países Bajos", "New Zealand": "Nueva Zelanda", "Nigeria": "Nigeria",
     "Norway": "Noruega", "Panama": "Panamá", "Paraguay": "Paraguay", "Peru": "Perú",
@@ -609,8 +618,8 @@ def _wc_lookup_channel(m: dict, index: list) -> str | None:
     """Find the broadcasting channel for a match by date + both team names."""
     if not index or not m.get("date"):
         return None
-    home = _strip_accents(WC_TEAM_ES.get(m.get("home"), m.get("home") or ""))
-    away = _strip_accents(WC_TEAM_ES.get(m.get("away"), m.get("away") or ""))
+    home = _strip_accents(WC_TEAM_ES.get(m.get("home_en"), m.get("home_en") or ""))
+    away = _strip_accents(WC_TEAM_ES.get(m.get("away_en"), m.get("away_en") or ""))
     if not home or not away:
         return None
     for iso, text, channel in index:
@@ -679,12 +688,12 @@ def get_wc_standings() -> dict:
     for m in all_matches:
         if m["status"] != "finished" or m["home_score"] is None or m["away_score"] is None:
             continue
-        group = WC_TEAM_GROUP.get(m["home"]) or WC_TEAM_GROUP.get(m["away"])
+        group = WC_TEAM_GROUP.get(m["home_en"]) or WC_TEAM_GROUP.get(m["away_en"])
         # Only score it as a group match when both teams share the same group.
-        if not group or WC_TEAM_GROUP.get(m["home"]) != WC_TEAM_GROUP.get(m["away"]):
+        if not group or WC_TEAM_GROUP.get(m["home_en"]) != WC_TEAM_GROUP.get(m["away_en"]):
             continue
         hs, as_ = m["home_score"], m["away_score"]
-        home, away = tables[group][m["home"]], tables[group][m["away"]]
+        home, away = tables[group][m["home_en"]], tables[group][m["away_en"]]
         for row, gf, ga in ((home, hs, as_), (away, as_, hs)):
             row["played"] += 1
             row["gf"] += gf
@@ -707,6 +716,8 @@ def get_wc_standings() -> dict:
         )
         for i, row in enumerate(table, 1):
             row["rank"] = i
+            # Seeded from WC_GROUPS' English keys; show the name in Spanish.
+            row["team"] = WC_TEAM_ES.get(row["team"], row["team"])
         groups_out.append({"name": f"Grupo {g}", "table": table})
 
     return {
