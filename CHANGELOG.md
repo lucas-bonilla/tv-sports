@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **No upcoming World Cup matches were shown**: the free TheSportsDB tier serves `eventsseason.php` as a moving window that soon holds only already-played games, leaving the calendar with no future fixtures. Matches are now merged from `eventsseason.php` + `eventsnextleague.php` + `eventspastleague.php` (deduped by event id, best-effort per source) so upcoming days reappear while keeping played scores
+- **World Cup calendar no longer keeps the whole tournament history**: the fixtures view is trimmed to yesterday, today and upcoming days (Europe/Madrid). Standings still aggregate every finished group match, since they read the unfiltered event set
 - **World Cup group draw was hand-entered and wrong**: the 12 groups (A–L) are now the official FIFA draw, verified against the round-1 fixtures returned by the API. This also fixes group-stage results being dropped from the standings (e.g. South Korea–Czech Republic) when the two teams were pinned to different groups
 - **World Cup team names now display in Spanish** in both fixtures and standings (was showing TheSportsDB's English names); internal English keys are kept for group membership and Marca channel cross-reference. Added Iraq/Algeria (missing flag + translation) and fixed "RD Congo"
 - Refresh button now also refreshes the padel section; previously the iOS shortcut had to be closed and reopened to get fresh padel data
