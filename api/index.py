@@ -634,29 +634,68 @@ WC_DAYS_AHEAD = int(os.environ.get("WC_DAYS_AHEAD", "8"))
 WC_SEASON_START = os.environ.get("WC_SEASON_START", "2026-06-11")
 
 
-def _wc_events_for_days(start_date, end_date) -> list:
-    """Fetch every fixture in [start_date, end_date] (UTC dates, inclusive).
+def _wc_event_key(ev: dict):
+    """A logical match identity that survives the API reusing the same fixture
+    under different event ids for its scheduled (NS) and played (FT) records."""
+    return (
+        (ev.get("strHomeTeam") or "").strip().lower(),
+        (ev.get("strAwayTeam") or "").strip().lower(),
+        ev.get("intRound"),
+    )
 
-    The free TheSportsDB tier truncates the season/next/past league windows to a
-    handful of events, dropping whole days (e.g. Belgium–Egypt, Ivory Coast–
-    Ecuador). eventsday.php?d=<date>&l=<league> instead returns the *full* slate
-    for one UTC day, so we walk the range a day at a time and merge, deduped by
-    event id. Each day is best-effort: one failed request doesn't sink the rest.
+
+def _wc_event_rank(ev: dict) -> int:
+    """Prefer the most informative copy of a fixture when merging sources:
+    a finished/scored record beats a live one, which beats a not-started one."""
+    status = (ev.get("strStatus") or "").strip().upper()
+    has_score = ev.get("intHomeScore") not in (None, "") and ev.get("intAwayScore") not in (None, "")
+    if status in ("FT", "MATCH FINISHED", "AET", "PEN") or has_score:
+        return 2
+    if status in ("1H", "2H", "HT", "ET", "LIVE", "P"):
+        return 1
+    return 0
+
+
+def _wc_collect_events(start_date, end_date) -> list:
+    """Gather fixtures for [start_date, end_date] (UTC dates, inclusive).
+
+    The free TheSportsDB tier serves no single complete source:
+    - eventsday.php returns a day's *scheduled* slate but omits some finished
+      games (e.g. Sweden–Tunisia drops out once it ends);
+    - eventspastleague/eventsseason carry those finished results but are
+      truncated to a handful of events.
+    So we union the per-day calls with the season + recent-results endpoints and
+    dedupe by logical match identity (not event id, which differs between a
+    fixture's NS and FT records), keeping the most informative copy. Every source
+    is best-effort: a failed request never sinks the rest.
     """
-    by_id: dict = {}
+    raw: list = []
     d = start_date
     while d <= end_date:
         iso = d.isoformat()
         try:
-            data = _wc_get("/eventsday.php", {"d": iso, "l": WC_LEAGUE_ID})
+            raw += _wc_get("/eventsday.php", {"d": iso, "l": WC_LEAGUE_ID}).get("events") or []
         except Exception as e:
             logger.warning(f"World Cup eventsday {iso} failed: {e}")
-            d += timedelta(days=1)
-            continue
-        for ev in data.get("events") or []:
-            by_id[ev.get("idEvent") or id(ev)] = ev
         d += timedelta(days=1)
-    return list(by_id.values())
+
+    # Results endpoints fill in finished games that eventsday omits.
+    for path, params in (
+        ("/eventspastleague.php", {"id": WC_LEAGUE_ID}),
+        ("/eventsseason.php", {"id": WC_LEAGUE_ID, "s": WC_SEASON}),
+    ):
+        try:
+            raw += _wc_get(path, params).get("events") or []
+        except Exception as e:
+            logger.warning(f"World Cup fetch {path} failed: {e}")
+
+    merged: dict = {}
+    for ev in raw:
+        key = _wc_event_key(ev)
+        cur = merged.get(key)
+        if cur is None or _wc_event_rank(ev) > _wc_event_rank(cur):
+            merged[key] = ev
+    return list(merged.values())
 
 
 def get_wc_matches() -> dict:
@@ -671,7 +710,7 @@ def get_wc_matches() -> dict:
     last = today + timedelta(days=WC_DAYS_AHEAD)
     # Query one extra UTC day on each side: a kickoff stored under a UTC date can
     # land on the adjacent day once re-expressed in Madrid time.
-    events = _wc_events_for_days(yesterday - timedelta(days=1), last + timedelta(days=1))
+    events = _wc_collect_events(yesterday - timedelta(days=1), last + timedelta(days=1))
 
     channel_index = _wc_channel_index()
 
@@ -730,7 +769,7 @@ def get_wc_standings() -> dict:
         start = datetime(2026, 6, 11).date()
     today = datetime.now(MADRID_TZ).date()
     # One extra UTC day on each side absorbs the Madrid offset (see get_wc_matches).
-    events = _wc_events_for_days(start - timedelta(days=1), today + timedelta(days=1))
+    events = _wc_collect_events(start - timedelta(days=1), today + timedelta(days=1))
     all_matches = [_wc_normalize_match(ev) for ev in events]
 
     # Seed every group with its teams at zero.
