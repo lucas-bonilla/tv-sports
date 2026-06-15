@@ -628,33 +628,34 @@ def _wc_lookup_channel(m: dict, index: list) -> str | None:
     return None
 
 
-def _wc_fetch_events() -> list:
-    """Collect fixtures from the season, upcoming and recent-results endpoints.
+# How many days ahead the calendar reaches (so "next week" is covered).
+WC_DAYS_AHEAD = int(os.environ.get("WC_DAYS_AHEAD", "8"))
+# When the tournament started — the lower bound for the standings scan.
+WC_SEASON_START = os.environ.get("WC_SEASON_START", "2026-06-11")
 
-    The free TheSportsDB tier serves the season payload as a moving window that
-    soon only contains already-played matches, so on its own it leaves the UI
-    with no upcoming games. Merging in eventsnextleague (fixtures) and
-    eventspastleague (recent results), deduped by event id, restores the future
-    days while keeping the played scores. Each source is best-effort: if one
-    fails or is empty, the others still populate the calendar.
+
+def _wc_events_for_days(start_date, end_date) -> list:
+    """Fetch every fixture in [start_date, end_date] (UTC dates, inclusive).
+
+    The free TheSportsDB tier truncates the season/next/past league windows to a
+    handful of events, dropping whole days (e.g. Belgium–Egypt, Ivory Coast–
+    Ecuador). eventsday.php?d=<date>&l=<league> instead returns the *full* slate
+    for one UTC day, so we walk the range a day at a time and merge, deduped by
+    event id. Each day is best-effort: one failed request doesn't sink the rest.
     """
     by_id: dict = {}
-    sources = (
-        ("/eventsseason.php", {"id": WC_LEAGUE_ID, "s": WC_SEASON}),
-        ("/eventsnextleague.php", {"id": WC_LEAGUE_ID}),
-        ("/eventspastleague.php", {"id": WC_LEAGUE_ID}),
-    )
-    for path, params in sources:
+    d = start_date
+    while d <= end_date:
+        iso = d.isoformat()
         try:
-            data = _wc_get(path, params)
+            data = _wc_get("/eventsday.php", {"d": iso, "l": WC_LEAGUE_ID})
         except Exception as e:
-            logger.warning(f"World Cup fetch {path} failed: {e}")
+            logger.warning(f"World Cup eventsday {iso} failed: {e}")
+            d += timedelta(days=1)
             continue
         for ev in data.get("events") or []:
-            eid = ev.get("idEvent")
-            # Later sources (next/past) carry fresher status/scores, so let them
-            # overwrite the season snapshot for the same fixture.
-            by_id[eid or id(ev)] = ev
+            by_id[ev.get("idEvent") or id(ev)] = ev
+        d += timedelta(days=1)
     return list(by_id.values())
 
 
@@ -662,20 +663,26 @@ def get_wc_matches() -> dict:
     """Return World Cup fixtures+results grouped by day (chronological).
 
     Each day already includes any played scores, so selecting a past day in the
-    UI shows that day's results without an extra request. Older days are dropped:
-    only yesterday, today and upcoming days are kept.
+    UI shows that day's results without an extra request. The window is bounded:
+    only yesterday, today and the next WC_DAYS_AHEAD days are kept.
     """
-    events = _wc_fetch_events()
+    today = datetime.now(MADRID_TZ).date()
+    yesterday = today - timedelta(days=1)
+    last = today + timedelta(days=WC_DAYS_AHEAD)
+    # Query one extra UTC day on each side: a kickoff stored under a UTC date can
+    # land on the adjacent day once re-expressed in Madrid time.
+    events = _wc_events_for_days(yesterday - timedelta(days=1), last + timedelta(days=1))
 
     channel_index = _wc_channel_index()
 
-    # Only keep yesterday onward — the calendar is forward-looking, not an archive.
-    min_date = (datetime.now(MADRID_TZ).date() - timedelta(days=1)).isoformat()
+    # Keep yesterday → next week (Madrid local dates); the calendar is
+    # forward-looking, not an archive.
+    min_date, max_date = yesterday.isoformat(), last.isoformat()
 
     days: dict = {}
     for ev in events:
         m = _wc_normalize_match(ev)
-        if (m.get("date") or "") < min_date:
+        if not (min_date <= (m.get("date") or "") <= max_date):
             continue
         channel = _wc_lookup_channel(m, channel_index)
         # DAZN holds the full World Cup rights in Spain; RTVE (La 1) only carries a
@@ -714,9 +721,17 @@ def get_wc_standings() -> dict:
     matches with both scores count; teams start at zero so the tables show even
     before a ball is kicked.
     """
-    # Standings span the whole tournament, so use the unfiltered event set
-    # rather than the yesterday-onward calendar window from get_wc_matches().
-    all_matches = [_wc_normalize_match(ev) for ev in _wc_fetch_events()]
+    # Standings span the whole tournament, so scan from the tournament start
+    # through today rather than the bounded calendar window get_wc_matches() uses.
+    try:
+        start = datetime.strptime(WC_SEASON_START, "%Y-%m-%d").date()
+    except ValueError:
+        logger.warning(f"Invalid WC_SEASON_START {WC_SEASON_START!r}; defaulting to 2026-06-11")
+        start = datetime(2026, 6, 11).date()
+    today = datetime.now(MADRID_TZ).date()
+    # One extra UTC day on each side absorbs the Madrid offset (see get_wc_matches).
+    events = _wc_events_for_days(start - timedelta(days=1), today + timedelta(days=1))
+    all_matches = [_wc_normalize_match(ev) for ev in events]
 
     # Seed every group with its teams at zero.
     tables: dict = {g: {t: _wc_blank_row(t) for t in teams} for g, teams in WC_GROUPS.items()}
