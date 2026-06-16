@@ -426,6 +426,15 @@ WC_API = f"https://www.thesportsdb.com/api/v1/json/{WC_KEY}"
 WC_LEAGUE_ID = "4429"  # FIFA World Cup
 WC_SEASON = os.environ.get("WC_SEASON", "2026")
 
+# API-Football (api-sports.io) — used to enrich a match's detail with the full
+# goals/cards/subs list, because TheSportsDB's free tier truncates its timeline to
+# ~5 events. We reach it via the idAPIfootball every TheSportsDB event carries.
+# Configure API_FOOTBALL_KEY to enable; defaults target the direct api-sports.io
+# host (header x-apisports-key). Set API_FOOTBALL_HOST to a *.rapidapi.com host to
+# go through RapidAPI instead (the client switches to the x-rapidapi-* headers).
+API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY", "")
+API_FOOTBALL_HOST = os.environ.get("API_FOOTBALL_HOST", "v3.football.api-sports.io")
+
 
 # Map TheSportsDB national-team names to ISO-3166 alpha-2 codes so we can render
 # a flag emoji instead of the federation crest. Covers every nation that can
@@ -1047,6 +1056,89 @@ def get_wc_standings() -> dict:
 # store it in Redis with no expiry — that's the per-match registro the slider reads.
 
 
+def _apifootball_enabled() -> bool:
+    return bool(API_FOOTBALL_KEY)
+
+
+def _apifootball_get(path: str, params: dict) -> dict:
+    """Call API-Football, handling both the direct and RapidAPI hosts.
+
+    Direct (v3.football.api-sports.io) authenticates with x-apisports-key and has
+    no path prefix; RapidAPI hosts prefix the path with /v3 and use x-rapidapi-*.
+    """
+    is_rapid = "rapidapi.com" in API_FOOTBALL_HOST
+    base = f"https://{API_FOOTBALL_HOST}/v3" if is_rapid else f"https://{API_FOOTBALL_HOST}"
+    headers = (
+        {"x-rapidapi-key": API_FOOTBALL_KEY, "x-rapidapi-host": API_FOOTBALL_HOST}
+        if is_rapid else {"x-apisports-key": API_FOOTBALL_KEY}
+    )
+    resp = requests.get(f"{base}{path}", params=params, headers=headers, timeout=10)
+    resp.raise_for_status()
+    return resp.json() or {}
+
+
+def _apifootball_event(it: dict, home_id) -> dict | None:
+    """Normalize one API-Football fixture event into our compact shape."""
+    type_ = (it.get("type") or "").strip().lower()
+    detail = (it.get("detail") or "").strip().lower()
+    player = ((it.get("player") or {}).get("name") or "").strip()
+    if not player:
+        return None
+    if type_ == "goal":
+        kind = "own_goal" if "own" in detail else ("penalty" if "penalty" in detail else "goal")
+    elif type_ == "card":
+        # A second yellow is effectively a sending-off — show it as red.
+        kind = "red" if ("red" in detail or "second yellow" in detail) else "yellow"
+    elif type_ == "subst":
+        kind = "sub"
+    else:
+        return None
+    t = it.get("time") or {}
+    minute = _wc_int(t.get("elapsed"))
+    if minute is not None and t.get("extra") not in (None, "", 0):
+        extra = _wc_int(t.get("extra"))
+        if extra:
+            minute += extra
+    assist = ((it.get("assist") or {}).get("name") or "").strip()
+    team_id = (it.get("team") or {}).get("id")
+    return {
+        "kind": kind,
+        "minute": minute,
+        "player": player,
+        "assist": assist or None,
+        "home": home_id is not None and team_id == home_id,
+        "team": ((it.get("team") or {}).get("name") or "").strip(),
+    }
+
+
+def _apifootball_events(fixture_id: str) -> list:
+    """Full goals/cards/subs for a fixture from API-Football, sorted by minute.
+
+    Returns [] on any failure or when the fixture is unknown there, so the caller
+    can fall back to TheSportsDB's (truncated) timeline.
+    """
+    if not _apifootball_enabled() or not fixture_id:
+        return []
+    try:
+        data = _apifootball_get("/fixtures/events", {"fixture": fixture_id})
+    except Exception as e:
+        logger.warning(f"API-Football events {fixture_id} failed: {e}")
+        return []
+    raw = data.get("response") or []
+    # The fixture's home team id isn't on the events; fetch it once so we can flag
+    # which side each event belongs to. Cheap relative to the per-match cache.
+    home_id = None
+    try:
+        finfo = (_apifootball_get("/fixtures", {"id": fixture_id}).get("response") or [None])[0]
+        if finfo:
+            home_id = ((finfo.get("teams") or {}).get("home") or {}).get("id")
+    except Exception as e:
+        logger.warning(f"API-Football fixture {fixture_id} failed: {e}")
+    events = [e for e in (_apifootball_event(it, home_id) for it in raw) if e]
+    events.sort(key=lambda e: (e["minute"] is None, e["minute"] or 0))
+    return events
+
+
 def _wc_timeline_entry(it: dict) -> dict | None:
     """Normalize one timeline row to a compact, display-ready event."""
     kind = (it.get("strTimeline") or "").strip().lower()
@@ -1075,11 +1167,20 @@ def _wc_timeline_entry(it: dict) -> dict | None:
     }
 
 
+# Goals don't reconcile with the score until we have the full event list, so when
+# the scorers come from TheSportsDB's truncated timeline we cache the detail only
+# briefly — leaving room for a later API-Football fetch (or replay) to complete it.
+WC_DETAIL_PARTIAL_TTL = int(os.environ.get("WC_DETAIL_PARTIAL_TTL", "21600"))  # 6h
+
+
 def get_wc_match_detail(event_id: str) -> dict:
     """Return a finished match's summary: score, scorers, cards and basic info.
 
-    Cached forever in Redis once the match is finished (its timeline is immutable);
-    live/unknown matches are fetched fresh each time so a result can still settle.
+    Event detail (score, venue) comes from TheSportsDB; the goals/cards list comes
+    from API-Football when configured (complete) and falls back to TheSportsDB's
+    truncated timeline otherwise. A finished match enriched from a *complete*
+    source is cached forever in Redis (the per-match registro); a partial one gets
+    a short TTL so it can be completed later. Live matches are never persisted.
     """
     cache_key = f"wc:match:{event_id}"
     cached = kv_get_json(cache_key)
@@ -1095,9 +1196,14 @@ def get_wc_match_detail(event_id: str) -> dict:
     away_score = _wc_int(detail.get("intAwayScore"))
     status = _wc_match_status(detail, home_score, away_score)
 
-    timeline_raw = _wc_get("/lookuptimeline.php", {"id": event_id}).get("timeline") or []
-    events = [e for e in (_wc_timeline_entry(it) for it in timeline_raw) if e]
-    events.sort(key=lambda e: (e["minute"] is None, e["minute"] or 0))
+    # Prefer API-Football's complete event list; fall back to TheSportsDB's.
+    events = _apifootball_events(detail.get("idAPIfootball"))
+    source = "apifootball"
+    if not events:
+        timeline_raw = _wc_get("/lookuptimeline.php", {"id": event_id}).get("timeline") or []
+        events = [e for e in (_wc_timeline_entry(it) for it in timeline_raw) if e]
+        events.sort(key=lambda e: (e["minute"] is None, e["minute"] or 0))
+        source = "thesportsdb"
 
     out = {
         "match_id": event_id,
@@ -1114,11 +1220,14 @@ def get_wc_match_detail(event_id: str) -> dict:
         "country": detail.get("strCountry"),
         "spectators": _wc_int(detail.get("intSpectators")),
         "events": events,
+        "events_source": source,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
-    # Only persist immutable (finished) matches; a live one must stay refreshable.
+    # Persist only finished matches. Forever when the event list is complete
+    # (API-Football); briefly when it's the truncated TheSportsDB fallback.
     if status == "finished":
-        kv_set_json(cache_key, out)  # no expiry — this is the registro
+        ttl = None if source == "apifootball" else WC_DETAIL_PARTIAL_TTL
+        kv_set_json(cache_key, out, ttl)
     return out
 
 

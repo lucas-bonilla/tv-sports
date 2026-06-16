@@ -279,6 +279,11 @@ function wcDetailBody(d) {
     d.spectators ? `${d.spectators.toLocaleString("es-ES")} espectadores` : null,
   ].filter(Boolean);
 
+  // The free TheSportsDB tier caps its timeline at ~5 events, so flag when the
+  // goals shown don't add up to the final score (incomplete fallback data).
+  const totalScore = (d.home_score || 0) + (d.away_score || 0);
+  const partial = d.events_source !== "apifootball" && totalScore > goals.length;
+
   return `
     <div class="wc-detail-score">
       <span class="wc-detail-team">${d.home}${wcFlag(d.home_flag)}</span>
@@ -289,6 +294,7 @@ function wcDetailBody(d) {
       : '<div class="wc-detail-empty">Sin goles.</div>'}
     ${cards.length ? `<div class="wc-detail-sub">Tarjetas</div>
       <ul class="wc-detail-list wc-detail-list--cards">${cards.map(wcEventRow).join("")}</ul>` : ""}
+    ${partial ? '<div class="wc-detail-partial">⚠ Datos parciales — algunos goles o tarjetas no están disponibles.</div>' : ""}
     ${info.length ? `<div class="wc-detail-info">${info.join(" · ")}</div>` : ""}`;
 }
 

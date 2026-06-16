@@ -987,3 +987,12 @@ main {
   font-size: 0.85rem;
   padding: 0.5rem 0;
 }
+.wc-detail-partial {
+  text-align: center;
+  font-size: 0.72rem;
+  color: #d29922;
+  background: rgba(210, 153, 34, 0.12);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.6rem;
+}
