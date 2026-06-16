@@ -87,15 +87,20 @@ function renderWcMatches() {
       </div>
     </div>`).join("");
 
-  // Future matches are addable to a calendar; reuse the shared modal.
+  // Two interactions share the card grid: upcoming matches open the calendar
+  // modal; finished matches open a result summary (scorers, cards, venue).
+  const activate = card => {
+    if (card.dataset.wcDetail) openWcDetail(card.dataset.wcDetail);
+    else if (card.dataset.wcEvent) openWcCalendar(JSON.parse(decodeURIComponent(card.dataset.wcEvent)));
+  };
   container.onclick = e => {
-    const card = e.target.closest("[data-wc-event]");
-    if (card) openWcCalendar(JSON.parse(decodeURIComponent(card.dataset.wcEvent)));
+    const card = e.target.closest("[data-wc-event],[data-wc-detail]");
+    if (card) activate(card);
   };
   container.onkeydown = e => {
     if (e.key !== "Enter" && e.key !== " ") return;
-    const card = e.target.closest("[data-wc-event]");
-    if (card) { e.preventDefault(); openWcCalendar(JSON.parse(decodeURIComponent(card.dataset.wcEvent))); }
+    const card = e.target.closest("[data-wc-event],[data-wc-detail]");
+    if (card) { e.preventDefault(); activate(card); }
   };
 
   if (typeof buildQuickNav === "function") buildQuickNav();
@@ -123,6 +128,8 @@ function renderWcMatch(m) {
   // Only upcoming, non-postponed matches with a kickoff time can be scheduled.
   const addable = !live && !done && !m.postponed && !!m.time && !!m.date;
   const payload = addable ? encodeURIComponent(JSON.stringify(m)) : "";
+  // Finished matches we have an id for open a result summary (scorers, cards).
+  const detailable = (done || live) && !!m.match_id;
 
   const winA = done && hasScore && m.home_score > m.away_score;
   const winB = done && hasScore && m.away_score > m.home_score;
@@ -133,9 +140,15 @@ function renderWcMatch(m) {
 
   const competition = Number.isFinite(m.round) ? `Jornada ${m.round}` : "Mundial";
 
+  const interaction = detailable
+    ? `data-wc-detail="${m.match_id}" role="button" tabindex="0" title="Ver resumen del partido"`
+    : addable
+      ? `data-wc-event="${payload}" role="button" tabindex="0" title="Añadir al calendario"`
+      : "";
+
   return `
     <div class="event-card wc-card ${live ? "wc-card--live" : ""} ${done ? "wc-card--done" : ""}"
-      ${addable ? `data-wc-event="${payload}" role="button" tabindex="0" title="Añadir al calendario"` : ""}>
+      ${interaction}>
       <div class="event-time">${lead}</div>
       <div class="event-body">
         <div class="event-match">${title}</div>
@@ -233,6 +246,76 @@ function wcEventForCalendar(m) {
 function openWcCalendar(m) {
   const event = wcEventForCalendar(m);
   if (event && typeof openCalendarModal === "function") openCalendarModal(event);
+}
+
+// --- Match summary slider (resultado, goleadores, info) ---
+
+const WC_EVENT_ICON = {
+  goal: "⚽", penalty: "⚽", own_goal: "🥅", yellow: "🟨", red: "🟥", sub: "🔁",
+};
+
+function wcEventRow(e) {
+  const icon = WC_EVENT_ICON[e.kind] || "•";
+  const min = e.minute != null ? `${e.minute}'` : "";
+  const tag = e.kind === "penalty" ? " (pen.)" : e.kind === "own_goal" ? " (p.p.)" : "";
+  const assist = e.assist && (e.kind === "goal" || e.kind === "penalty")
+    ? `<span class="wc-detail-assist">asist. ${e.assist}</span>` : "";
+  // Home events sit on the left rail, away events on the right.
+  return `
+    <li class="wc-detail-ev ${e.home ? "wc-detail-ev--home" : "wc-detail-ev--away"}">
+      <span class="wc-detail-min">${min}</span>
+      <span class="wc-detail-icon">${icon}</span>
+      <span class="wc-detail-player">${e.player}${tag}${assist}</span>
+    </li>`;
+}
+
+function wcDetailBody(d) {
+  const goals = d.events.filter(e => e.kind === "goal" || e.kind === "penalty" || e.kind === "own_goal");
+  const cards = d.events.filter(e => e.kind === "yellow" || e.kind === "red");
+  const score = (d.home_score != null && d.away_score != null) ? `${d.home_score} - ${d.away_score}` : "vs";
+  const info = [
+    Number.isFinite(d.round) ? `Jornada ${d.round}` : null,
+    [d.venue, d.city].filter(Boolean).join(", ") || null,
+    d.spectators ? `${d.spectators.toLocaleString("es-ES")} espectadores` : null,
+  ].filter(Boolean);
+
+  return `
+    <div class="wc-detail-score">
+      <span class="wc-detail-team">${d.home}${wcFlag(d.home_flag)}</span>
+      <span class="wc-detail-result">${score}</span>
+      <span class="wc-detail-team">${wcFlag(d.away_flag)}${d.away}</span>
+    </div>
+    ${goals.length ? `<ul class="wc-detail-list">${goals.map(wcEventRow).join("")}</ul>`
+      : '<div class="wc-detail-empty">Sin goles.</div>'}
+    ${cards.length ? `<div class="wc-detail-sub">Tarjetas</div>
+      <ul class="wc-detail-list wc-detail-list--cards">${cards.map(wcEventRow).join("")}</ul>` : ""}
+    ${info.length ? `<div class="wc-detail-info">${info.join(" · ")}</div>` : ""}`;
+}
+
+async function openWcDetail(matchId) {
+  const existing = document.getElementById("wc-detail-modal");
+  if (existing) existing.remove();
+
+  const modal = document.createElement("div");
+  modal.id = "wc-detail-modal";
+  modal.className = "cal-modal-overlay";
+  modal.innerHTML = `
+    <div class="cal-modal-sheet wc-detail-sheet">
+      <button class="cal-modal-close" aria-label="Cerrar">✕</button>
+      <div class="wc-detail-content"><div class="spinner"></div></div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.querySelector(".cal-modal-close").addEventListener("click", () => modal.remove());
+  modal.addEventListener("click", e => { if (e.target === modal) modal.remove(); });
+
+  const content = modal.querySelector(".wc-detail-content");
+  try {
+    const res = await fetch(`/api/wc/match/${matchId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    content.innerHTML = wcDetailBody(await res.json());
+  } catch (err) {
+    content.innerHTML = `<div class="wc-detail-empty">No se pudo cargar el resumen.<br/><small>${err.message}</small></div>`;
+  }
 }
 
 // Contribute the World Cup's days to the shared day bar and re-render on

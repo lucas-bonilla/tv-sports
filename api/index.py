@@ -6,7 +6,9 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import asyncio
+import json
 import logging
+import os
 import time
 import unicodedata
 
@@ -21,6 +23,65 @@ def _strip_accents(s: str) -> str:
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# --- Shared cache (Upstash Redis REST, optional) ---
+#
+# Vercel runs this as stateless functions, so the in-memory caches further down
+# are per-instance and die on every cold start — never shared between them. When
+# an Upstash Redis integration is provisioned (KV_REST_API_URL/TOKEN, the names
+# Vercel's Upstash Marketplace integration injects) we use it as a *shared* cache
+# across instances and as the historical match-detail store. It degrades
+# gracefully: with no Redis configured every helper is a no-op and callers fall
+# back to the in-memory caches / live fetches.
+
+KV_URL = os.environ.get("KV_REST_API_URL") or os.environ.get("UPSTASH_REDIS_REST_URL")
+KV_TOKEN = os.environ.get("KV_REST_API_TOKEN") or os.environ.get("UPSTASH_REDIS_REST_TOKEN")
+
+
+def kv_enabled() -> bool:
+    return bool(KV_URL and KV_TOKEN)
+
+
+def _kv_cmd(command: list):
+    """Run one Upstash REST command; return its 'result' or None on any error.
+
+    Upstash's REST API takes a command as a JSON array (e.g. ["GET", key]) posted
+    to the base URL. A short timeout and broad except keep a flaky cache from ever
+    blocking a request.
+    """
+    if not kv_enabled():
+        return None
+    try:
+        resp = requests.post(
+            KV_URL,
+            json=command,
+            headers={"Authorization": f"Bearer {KV_TOKEN}"},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        return resp.json().get("result")
+    except Exception as e:
+        logger.warning(f"Redis {command[0]} failed: {e}")
+        return None
+
+
+def kv_get_json(key: str):
+    raw = _kv_cmd(["GET", key])
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def kv_set_json(key: str, value, ttl: int | None = None) -> None:
+    """Store JSON under key. ttl=None means no expiry (immutable records)."""
+    cmd = ["SET", key, json.dumps(value, ensure_ascii=False)]
+    if ttl:
+        cmd += ["EX", str(ttl)]
+    _kv_cmd(cmd)
+
 
 # --- Scraper ---
 
@@ -360,8 +421,6 @@ def get_padel_schedule(slug: str) -> dict:
 # Unlike Premier Padel, the season endpoint already carries played scores, so the
 # same payload serves both the upcoming fixtures and the results of past days.
 
-import os
-
 WC_KEY = os.environ.get("THESPORTSDB_KEY", "3")
 WC_API = f"https://www.thesportsdb.com/api/v1/json/{WC_KEY}"
 WC_LEAGUE_ID = "4429"  # FIFA World Cup
@@ -533,6 +592,7 @@ def _wc_normalize_match(ev: dict) -> dict:
         "country": ev.get("strCountry"),
         "postponed": (ev.get("strPostponed") or "").lower() == "yes",
         "channel": None,  # filled from Marca's TV schedule when the match is listed
+        "source": "thesportsdb",
     }
 
 
@@ -578,16 +638,57 @@ def _es_date_to_iso(date_str: str) -> str | None:
     return f"{year:04d}-{month:02d}-{day:02d}"
 
 
-def _wc_channel_index() -> list:
-    """Scrape Marca's TV schedule and index its World Cup football listings.
+# Reverse of WC_TEAM_ES (accent-insensitive) so we can turn Marca's Spanish match
+# labels back into TheSportsDB's English names. A few Marca spellings don't round
+# trip cleanly ("RD del Congo" vs our "RD Congo"), so patch those explicitly.
+WC_ES_EN = {_strip_accents(es): en for en, es in WC_TEAM_ES.items()}
+WC_ES_EN.update({
+    "rd del congo": "DR Congo",
+    "republica checa": "Czech Republic",
+})
 
-    Returns a list of (iso_date, normalized_match_text, channel). Marca only
-    covers the current week, so only near-term matches get a channel — which is
-    exactly the "if available" behaviour we want. A scrape failure is non-fatal:
-    matches simply render without a channel.
+
+def _wc_team_pair(home_en, away_en) -> frozenset:
+    """Unordered identity for a fixture, so a match survives home/away swaps
+    between Marca and TheSportsDB."""
+    return frozenset((
+        (home_en or "").strip().lower(),
+        (away_en or "").strip().lower(),
+    ))
+
+
+def _wc_marca_match(ev: dict) -> dict | None:
+    """Parse one Marca World Cup listing into English team names + iso date.
+
+    Returns {date, time, home_en, away_en, channel} or None when the row isn't a
+    two-team match or a side can't be mapped to TheSportsDB's naming.
     """
-    # Reuse the /api/events cache when it's warm so we don't scrape Marca twice;
-    # only fall back to a fresh scrape when it's empty or stale.
+    text = ev.get("match") or ""
+    if " - " not in text:
+        return None
+    home_es, away_es = (s.strip() for s in text.split(" - ", 1))
+    home_en = WC_ES_EN.get(_strip_accents(home_es))
+    away_en = WC_ES_EN.get(_strip_accents(away_es))
+    iso = _es_date_to_iso(ev.get("date"))
+    if not (home_en and away_en and iso):
+        return None
+    return {
+        "date": iso,
+        "time": (ev.get("time") or "").strip()[:5],
+        "home_en": home_en,
+        "away_en": away_en,
+        "channel": (ev.get("channel") or "").strip() or None,
+    }
+
+
+def _wc_marca_fixtures() -> list:
+    """Scrape Marca's TV schedule and return its World Cup matches (English names).
+
+    Marca lists the *full* week with kickoff times and channels — far more
+    complete than the free TheSportsDB tier, which returns only a few matches per
+    day — so it doubles as a fixture source, not just a channel lookup. Reuses the
+    warm /api/events cache to avoid a second scrape. A failure is non-fatal.
+    """
     now = time.time()
     if _cache["data"] and (now - _cache["ts"]) < CACHE_TTL:
         data = _cache["data"]
@@ -595,10 +696,10 @@ def _wc_channel_index() -> list:
         try:
             data = scrape_events()
         except Exception as e:
-            logger.warning(f"Marca scrape for World Cup channels failed: {e}")
+            logger.warning(f"Marca scrape for World Cup failed: {e}")
             return []
 
-    index = []
+    out = []
     for ev in data.get("events", []):
         if ev.get("emoji") != "⚽":
             continue
@@ -606,32 +707,66 @@ def _wc_channel_index() -> list:
         # "Mundial"); "mund" matches both while still excluding club football.
         if "mund" not in _strip_accents(ev.get("competition")):
             continue
-        iso = _es_date_to_iso(ev.get("date"))
-        text = _strip_accents(ev.get("match"))
-        channel = (ev.get("channel") or "").strip()
-        if iso and text and channel:
-            index.append((iso, text, channel))
-    return index
+        m = _wc_marca_match(ev)
+        if m:
+            out.append(m)
+    return out
 
 
-def _wc_lookup_channel(m: dict, index: list) -> str | None:
-    """Find the broadcasting channel for a match by date + both team names."""
-    if not index or not m.get("date"):
+def _wc_marca_channel(m: dict, fixtures: list) -> str | None:
+    """Find a match's channel among the parsed Marca fixtures (date + team pair)."""
+    if not fixtures or not m.get("date"):
         return None
-    home = _strip_accents(WC_TEAM_ES.get(m.get("home_en"), m.get("home_en") or ""))
-    away = _strip_accents(WC_TEAM_ES.get(m.get("away_en"), m.get("away_en") or ""))
-    if not home or not away:
-        return None
-    for iso, text, channel in index:
-        if iso == m["date"] and home in text and away in text:
-            return channel
+    pair = _wc_team_pair(m.get("home_en"), m.get("away_en"))
+    for f in fixtures:
+        if f["date"] == m["date"] and _wc_team_pair(f["home_en"], f["away_en"]) == pair:
+            return f.get("channel")
     return None
+
+
+def _wc_match_from_marca(f: dict) -> dict:
+    """Build a normalized (upcoming) match record from a Marca-only fixture —
+    one TheSportsDB didn't return. No id/score; it's a not-yet-played match."""
+    home_en, away_en = f["home_en"], f["away_en"]
+    return {
+        "match_id": None,
+        "date": f["date"],
+        "time": f.get("time") or "",
+        "timestamp": None,
+        "round": None,  # Marca doesn't expose the matchday
+        "home": WC_TEAM_ES.get(home_en, home_en),
+        "away": WC_TEAM_ES.get(away_en, away_en),
+        "home_en": home_en,
+        "away_en": away_en,
+        "home_flag": _wc_flag(home_en),
+        "away_flag": _wc_flag(away_en),
+        "home_score": None,
+        "away_score": None,
+        "status": "upcoming",
+        "venue": None,
+        "country": None,
+        "postponed": False,
+        "channel": f.get("channel"),
+        "source": "marca",
+    }
 
 
 # How many days ahead the calendar reaches (so "next week" is covered).
 WC_DAYS_AHEAD = int(os.environ.get("WC_DAYS_AHEAD", "8"))
-# When the tournament started — the lower bound for the standings scan.
+# When the tournament started — the lower bound for the registro and standings.
 WC_SEASON_START = os.environ.get("WC_SEASON_START", "2026-06-11")
+# How long a persisted *current/future* day stays cached before a refresh; past
+# days are written with no expiry since their results no longer change.
+WC_PERSIST_TTL = int(os.environ.get("WC_PERSIST_TTL", "900"))
+
+
+def _wc_season_start_date():
+    """Parse WC_SEASON_START, falling back to the official 2026 kickoff."""
+    try:
+        return datetime.strptime(WC_SEASON_START, "%Y-%m-%d").date()
+    except ValueError:
+        logger.warning(f"Invalid WC_SEASON_START {WC_SEASON_START!r}; defaulting to 2026-06-11")
+        return datetime(2026, 6, 11).date()
 
 
 def _wc_event_key(ev: dict):
@@ -698,40 +833,126 @@ def _wc_collect_events(start_date, end_date) -> list:
     return list(merged.values())
 
 
+# --- Per-day persistence (registro desde el inicio del Mundial) ---
+#
+# TheSportsDB's free tier returns only a few matches per day and Marca only lists
+# the current week, so no single fetch sees the whole tournament. We merge each
+# fresh fetch into a per-day record in Redis so the calendar *accumulates*: a
+# Marca fixture stays in the registro after it scrolls out of Marca's week, and a
+# played score upgrades the record in place. Past days never expire.
+
+_WC_STATUS_RANK = {"finished": 2, "live": 1, "upcoming": 0}
+
+
+def _wc_day_key(iso: str) -> str:
+    return f"wc:day:{iso}"
+
+
+def _wc_richer(a: dict, b: dict) -> dict:
+    """Combine two records of the same fixture, keeping the most informative.
+
+    The higher-status record (finished > live > upcoming) is the base; missing
+    fields are then backfilled from the other copy, so e.g. a finished record
+    from TheSportsDB still inherits a kickoff time or channel that only Marca had.
+    """
+    base, other = (a, b) if _WC_STATUS_RANK.get(a["status"], 0) >= _WC_STATUS_RANK.get(b["status"], 0) else (b, a)
+    base = dict(base)
+    for field in ("channel", "time", "venue", "country", "match_id", "round", "timestamp"):
+        if not base.get(field) and other.get(field):
+            base[field] = other[field]
+    if base.get("home_score") is None and other.get("home_score") is not None:
+        base["home_score"] = other["home_score"]
+        base["away_score"] = other["away_score"]
+    return base
+
+
+def _wc_dedup_day(matches: list) -> list:
+    """Collapse duplicate fixtures within a day by unordered team pair."""
+    by_pair: dict = {}
+    for m in matches:
+        pair = _wc_team_pair(m.get("home_en"), m.get("away_en"))
+        by_pair[pair] = _wc_richer(by_pair[pair], m) if pair in by_pair else m
+    return list(by_pair.values())
+
+
+def _wc_load_history(start_date, end_date) -> dict:
+    """Read the persisted per-day records for [start, end] in one MGET."""
+    if not kv_enabled():
+        return {}
+    isos = []
+    d = start_date
+    while d <= end_date:
+        isos.append(d.isoformat())
+        d += timedelta(days=1)
+    results = _kv_cmd(["MGET", *[_wc_day_key(i) for i in isos]]) or []
+    out: dict = {}
+    for iso, raw in zip(isos, results):
+        if not raw:
+            continue
+        try:
+            out[iso] = json.loads(raw)
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
 def get_wc_matches() -> dict:
     """Return World Cup fixtures+results grouped by day (chronological).
 
-    Each day already includes any played scores, so selecting a past day in the
-    UI shows that day's results without an extra request. The window is bounded:
-    only yesterday, today and the next WC_DAYS_AHEAD days are kept.
+    Three sources are unioned: TheSportsDB (scores, status, match ids), Marca's TV
+    grid (the *complete* week with kickoff times and channels — it fills the
+    matches TheSportsDB omits), and the persisted per-day registro built up from
+    earlier fetches. Each played day already carries its final scores, so picking
+    a past day in the UI shows that day's results without an extra request.
     """
     today = datetime.now(MADRID_TZ).date()
+    season_start = _wc_season_start_date()
     yesterday = today - timedelta(days=1)
     last = today + timedelta(days=WC_DAYS_AHEAD)
-    # Query one extra UTC day on each side: a kickoff stored under a UTC date can
-    # land on the adjacent day once re-expressed in Madrid time.
-    events = _wc_collect_events(yesterday - timedelta(days=1), last + timedelta(days=1))
 
-    channel_index = _wc_channel_index()
+    # Fresh fetch stays a narrow window to protect the rate-limited free tier; the
+    # deep history comes from the persisted registro. Query one extra UTC day on
+    # each side: a kickoff stored under a UTC date can land on the adjacent Madrid
+    # day. Don't fetch days before the tournament started.
+    fetch_from = max(season_start, yesterday - timedelta(days=1))
+    events = _wc_collect_events(fetch_from, last + timedelta(days=1))
+    marca = _wc_marca_fixtures()
 
-    # Keep yesterday → next week (Madrid local dates); the calendar is
-    # forward-looking, not an archive.
-    min_date, max_date = yesterday.isoformat(), last.isoformat()
+    today_iso = today.isoformat()
+    min_date, max_date = season_start.isoformat(), last.isoformat()
 
-    days: dict = {}
+    # Build today's fresh per-day slate from both live sources.
+    fresh: dict = {}
     for ev in events:
         m = _wc_normalize_match(ev)
-        if not (min_date <= (m.get("date") or "") <= max_date):
+        if min_date <= (m.get("date") or "") <= max_date:
+            fresh.setdefault(m["date"], []).append(m)
+    seen = {(d, _wc_team_pair(m["home_en"], m["away_en"])) for d, ms in fresh.items() for m in ms}
+    for f in marca:
+        if not (min_date <= f["date"] <= max_date):
             continue
-        channel = _wc_lookup_channel(m, channel_index)
-        # DAZN holds the full World Cup rights in Spain; RTVE (La 1) only carries a
-        # subset. So when Marca doesn't list the match on an open channel, fall
-        # back to DAZN — but only for matches still to come (a played result
-        # doesn't need a broadcaster).
-        if not channel and m.get("status") != "finished":
-            channel = "DAZN MUNDIAL"
-        m["channel"] = channel
-        days.setdefault(m["date"] or "?", []).append(m)
+        if (f["date"], _wc_team_pair(f["home_en"], f["away_en"])) in seen:
+            continue
+        fresh.setdefault(f["date"], []).append(_wc_match_from_marca(f))
+
+    # Attach channels (Marca grid, else DAZN fallback for upcoming) and dedup.
+    for iso, day_matches in fresh.items():
+        for m in day_matches:
+            if not m.get("channel"):
+                m["channel"] = _wc_marca_channel(m, marca)
+            # DAZN holds the full World Cup rights in Spain; RTVE (La 1) only
+            # carries a subset. A played result doesn't need a broadcaster.
+            if not m.get("channel") and m.get("status") != "finished":
+                m["channel"] = "DAZN MUNDIAL"
+        fresh[iso] = _wc_dedup_day(day_matches)
+
+    # Overlay the fresh slate onto the persisted registro, then write it back so
+    # the history keeps growing. Past days never expire; today/future refresh.
+    days = _wc_load_history(season_start, last)
+    for iso, day_matches in fresh.items():
+        days[iso] = _wc_dedup_day(days.get(iso, []) + day_matches)
+        ttl = None if iso < today_iso else WC_PERSIST_TTL
+        kv_set_json(_wc_day_key(iso), days[iso], ttl)
 
     # Within a day, order by kickoff time then home team for a stable read.
     for day_matches in days.values():
@@ -739,7 +960,7 @@ def get_wc_matches() -> dict:
 
     return {
         "season": WC_SEASON,
-        "days": [{"date": d, "matches": days[d]} for d in sorted(days.keys())],
+        "days": [{"date": d, "matches": days[d]} for d in sorted(days.keys()) if min_date <= d <= max_date],
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -760,17 +981,18 @@ def get_wc_standings() -> dict:
     matches with both scores count; teams start at zero so the tables show even
     before a ball is kicked.
     """
-    # Standings span the whole tournament, so scan from the tournament start
-    # through today rather than the bounded calendar window get_wc_matches() uses.
-    try:
-        start = datetime.strptime(WC_SEASON_START, "%Y-%m-%d").date()
-    except ValueError:
-        logger.warning(f"Invalid WC_SEASON_START {WC_SEASON_START!r}; defaulting to 2026-06-11")
-        start = datetime(2026, 6, 11).date()
+    # Standings span the whole tournament. Prefer the persisted registro (built by
+    # get_wc_matches) so we reuse already-fetched results instead of re-scanning
+    # the rate-limited API; fall back to a live scan when Redis isn't configured.
+    start = _wc_season_start_date()
     today = datetime.now(MADRID_TZ).date()
-    # One extra UTC day on each side absorbs the Madrid offset (see get_wc_matches).
-    events = _wc_collect_events(start - timedelta(days=1), today + timedelta(days=1))
-    all_matches = [_wc_normalize_match(ev) for ev in events]
+    history = _wc_load_history(start, today)
+    if history:
+        all_matches = [m for day in history.values() for m in day]
+    else:
+        # One extra UTC day on each side absorbs the Madrid offset (see get_wc_matches).
+        events = _wc_collect_events(start - timedelta(days=1), today + timedelta(days=1))
+        all_matches = [_wc_normalize_match(ev) for ev in events]
 
     # Seed every group with its teams at zero.
     tables: dict = {g: {t: _wc_blank_row(t) for t in teams} for g, teams in WC_GROUPS.items()}
@@ -815,6 +1037,89 @@ def get_wc_standings() -> dict:
         "groups": groups_out,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# --- Match detail (resumen de partido pasado: goleadores, tarjetas, info) ---
+#
+# The free TheSportsDB tier exposes lookupevent.php (venue, group, spectators) and
+# lookuptimeline.php (goals/cards/subs with minute, player and assist). A finished
+# match's timeline never changes, so once we've built a detail for an FT match we
+# store it in Redis with no expiry — that's the per-match registro the slider reads.
+
+
+def _wc_timeline_entry(it: dict) -> dict | None:
+    """Normalize one timeline row to a compact, display-ready event."""
+    kind = (it.get("strTimeline") or "").strip().lower()
+    detail = (it.get("strTimelineDetail") or "").strip()
+    minute = _wc_int(it.get("intTime"))
+    player = (it.get("strPlayer") or "").strip()
+    if not player:
+        return None
+    if kind == "goal":
+        own = "own goal" in detail.lower()
+        kind_out = "own_goal" if own else ("penalty" if "penalty" in detail.lower() else "goal")
+    elif kind == "card":
+        kind_out = "red" if "red" in detail.lower() else "yellow"
+    elif kind == "subst":
+        kind_out = "sub"
+    else:
+        return None
+    assist = (it.get("strAssist") or "").strip()
+    return {
+        "kind": kind_out,
+        "minute": minute,
+        "player": player,
+        "assist": assist if assist and assist != "0" else None,
+        "home": (it.get("strHome") or "").strip().lower() == "yes",
+        "team": (it.get("strTeam") or "").strip(),
+    }
+
+
+def get_wc_match_detail(event_id: str) -> dict:
+    """Return a finished match's summary: score, scorers, cards and basic info.
+
+    Cached forever in Redis once the match is finished (its timeline is immutable);
+    live/unknown matches are fetched fresh each time so a result can still settle.
+    """
+    cache_key = f"wc:match:{event_id}"
+    cached = kv_get_json(cache_key)
+    if cached:
+        return cached
+
+    detail = (_wc_get("/lookupevent.php", {"id": event_id}).get("events") or [None])[0]
+    if not detail:
+        raise HTTPException(status_code=404, detail="Partido no encontrado.")
+
+    home_en, away_en = detail.get("strHomeTeam"), detail.get("strAwayTeam")
+    home_score = _wc_int(detail.get("intHomeScore"))
+    away_score = _wc_int(detail.get("intAwayScore"))
+    status = _wc_match_status(detail, home_score, away_score)
+
+    timeline_raw = _wc_get("/lookuptimeline.php", {"id": event_id}).get("timeline") or []
+    events = [e for e in (_wc_timeline_entry(it) for it in timeline_raw) if e]
+    events.sort(key=lambda e: (e["minute"] is None, e["minute"] or 0))
+
+    out = {
+        "match_id": event_id,
+        "home": WC_TEAM_ES.get(home_en, home_en),
+        "away": WC_TEAM_ES.get(away_en, away_en),
+        "home_flag": _wc_flag(home_en),
+        "away_flag": _wc_flag(away_en),
+        "home_score": home_score,
+        "away_score": away_score,
+        "status": status,
+        "round": _wc_int(detail.get("intRound")),
+        "venue": detail.get("strVenue"),
+        "city": detail.get("strCity"),
+        "country": detail.get("strCountry"),
+        "spectators": _wc_int(detail.get("intSpectators")),
+        "events": events,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+    # Only persist immutable (finished) matches; a live one must stay refreshable.
+    if status == "finished":
+        kv_set_json(cache_key, out)  # no expiry — this is the registro
+    return out
 
 
 # --- In-memory cache ---
@@ -1026,6 +1331,19 @@ async def wc_standings():
                 logger.warning("Returning stale World Cup standings after failure")
                 return c["data"]
             raise HTTPException(status_code=500, detail="No se pudo cargar la clasificación del Mundial.")
+
+
+@app.get("/api/wc/match/{event_id}")
+async def wc_match_detail(event_id: str):
+    if not event_id.isdigit():
+        raise HTTPException(status_code=400, detail="Identificador de partido no válido.")
+    try:
+        return await asyncio.to_thread(get_wc_match_detail, event_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"World Cup match detail {event_id} failed: {e}")
+        raise HTTPException(status_code=500, detail="No se pudo cargar el resumen del partido.")
 
 
 @app.get("/api/health")

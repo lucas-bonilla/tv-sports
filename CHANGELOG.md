@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Marca as a World Cup fixture source (fills the missing matches)**: the free TheSportsDB tier returns only a few matches per day, so the calendar was dropping fixtures. Marca's TV grid lists the full week with kickoff times and channels and is now merged into the calendar as a first-class source (not just a channel lookup), unioned with TheSportsDB by unordered team pair + date. Spanish→English team-name reverse map with aliases (e.g. "RD del Congo")
+- **World Cup registro desde el inicio**: the calendar window now reaches back to the tournament start, and each fetch is merged into a per-day record in Redis so the history accumulates — a Marca fixture is retained after it scrolls out of Marca's week and a played score upgrades the record in place
+- **Match summary slider for played matches** (`/api/wc/match/{id}`): tapping a finished match opens a bottom sheet with the result, scorers (minute + assist), cards, and basic info (venue, city, spectators) from TheSportsDB's `lookupevent`/`lookuptimeline`. A finished match's timeline is immutable, so it's cached in Redis with no expiry — that's the per-match registro
+- **Shared cache via Upstash Redis (optional)**: Vercel's per-instance in-memory caches die on cold start; when `KV_REST_API_URL`/`KV_REST_API_TOKEN` are configured, the World Cup calendar/standings/match-details use Redis as a shared cache and historical store. Degrades gracefully to in-memory/live when Redis isn't configured (no new dependency — uses the Upstash REST API over `requests`)
 - **World Cup kickoff times in Spanish time**: fixtures from TheSportsDB (UTC) are converted to Europe/Madrid, recomputing the day too so a kickoff that crosses midnight is filed under the correct local date
 - **Broadcasting channel on World Cup matches**: each fixture is cross-referenced against Marca's TV schedule by date + team names (EN→ES name map) to attach the channel when it's listed; shown on the match card and used when adding to the calendar
 - **Padel tracking** via the Premier Padel (Qatar Airways Premier Padel Tour) API:
