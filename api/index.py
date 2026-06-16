@@ -1124,7 +1124,14 @@ def _apifootball_events(fixture_id: str) -> list:
     except Exception as e:
         logger.warning(f"API-Football events {fixture_id} failed: {e}")
         return []
+    # API-Football replies 200 even on auth/quota problems, surfacing them in an
+    # `errors` object with an empty `response`. Log it so a misconfigured key or a
+    # spent quota is visible instead of silently degrading to the fallback.
+    errors = data.get("errors")
+    if errors:
+        logger.warning(f"API-Football events {fixture_id} returned errors: {errors}")
     raw = data.get("response") or []
+    logger.info(f"API-Football events {fixture_id}: results={data.get('results')} events={len(raw)}")
     # The fixture's home team id isn't on the events; fetch it once so we can flag
     # which side each event belongs to. Cheap relative to the per-match cache.
     home_id = None
@@ -1137,6 +1144,49 @@ def _apifootball_events(fixture_id: str) -> list:
     events = [e for e in (_apifootball_event(it, home_id) for it in raw) if e]
     events.sort(key=lambda e: (e["minute"] is None, e["minute"] or 0))
     return events
+
+
+def _apifootball_diag(event_id: str) -> dict:
+    """Inspect what API-Football returns for a match — for troubleshooting only.
+
+    Surfaces the host/header mode, the idAPIfootball we map through, and the raw
+    `errors`/`results` so a bad key, wrong host, or unknown fixture id is obvious.
+    """
+    out: dict = {
+        "enabled": _apifootball_enabled(),
+        "host": API_FOOTBALL_HOST,
+        "mode": "rapidapi" if "rapidapi.com" in API_FOOTBALL_HOST else "direct",
+        "key_present": bool(API_FOOTBALL_KEY),
+    }
+    if not _apifootball_enabled():
+        out["hint"] = "API_FOOTBALL_KEY no está configurada."
+        return out
+    detail = (_wc_get("/lookupevent.php", {"id": event_id}).get("events") or [None])[0]
+    fixture_id = detail.get("idAPIfootball") if detail else None
+    out["idAPIfootball"] = fixture_id
+    if not fixture_id:
+        out["hint"] = "TheSportsDB no expone idAPIfootball para este partido."
+        return out
+    try:
+        data = _apifootball_get("/fixtures/events", {"fixture": fixture_id})
+        out["results"] = data.get("results")
+        out["errors"] = data.get("errors")
+        out["event_count"] = len(data.get("response") or [])
+        sample = (data.get("response") or [])[:3]
+        out["sample"] = [
+            {"min": (e.get("time") or {}).get("elapsed"), "type": e.get("type"),
+             "detail": e.get("detail"), "player": (e.get("player") or {}).get("name"),
+             "team": (e.get("team") or {}).get("name")}
+            for e in sample
+        ]
+        if out["errors"]:
+            out["hint"] = "API-Football devolvió errores (¿key inválida, host equivocado o cuota agotada?)."
+        elif out["event_count"] == 0:
+            out["hint"] = "Sin eventos: el idAPIfootball seguramente no existe en API-Football (datos del Mundial simulados)."
+    except Exception as e:
+        out["exception"] = str(e)
+        out["hint"] = "La llamada falló (host/red). Revisa API_FOOTBALL_HOST."
+    return out
 
 
 def _wc_timeline_entry(it: dict) -> dict | None:
@@ -1182,9 +1232,13 @@ def get_wc_match_detail(event_id: str) -> dict:
     source is cached forever in Redis (the per-match registro); a partial one gets
     a short TTL so it can be completed later. Live matches are never persisted.
     """
-    cache_key = f"wc:match:{event_id}"
+    # v2: the key is versioned so detail records cached by an earlier build (which
+    # stored TheSportsDB's truncated timeline) are ignored, not served forever.
+    cache_key = f"wc:match:v2:{event_id}"
     cached = kv_get_json(cache_key)
-    if cached:
+    # Serve the cache unless it's a partial (TheSportsDB) record while API-Football
+    # is now configured — in that case retry so the key can upgrade it to complete.
+    if cached and not (_apifootball_enabled() and cached.get("events_source") != "apifootball"):
         return cached
 
     detail = (_wc_get("/lookupevent.php", {"id": event_id}).get("events") or [None])[0]
@@ -1453,6 +1507,14 @@ async def wc_match_detail(event_id: str):
     except Exception as e:
         logger.error(f"World Cup match detail {event_id} failed: {e}")
         raise HTTPException(status_code=500, detail="No se pudo cargar el resumen del partido.")
+
+
+@app.get("/api/wc/diag/{event_id}")
+async def wc_match_diag(event_id: str):
+    """Troubleshooting: what does API-Football return for this match's events?"""
+    if not event_id.isdigit():
+        raise HTTPException(status_code=400, detail="Identificador de partido no válido.")
+    return await asyncio.to_thread(_apifootball_diag, event_id)
 
 
 @app.get("/api/health")
