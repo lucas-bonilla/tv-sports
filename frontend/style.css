@@ -948,6 +948,16 @@ main {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.wc-detail-result--live { color: #f85149; }
+
+.wc-detail-live {
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #f85149;
+  margin-bottom: 0.5rem;
+}
 
 .wc-detail-list {
   list-style: none;

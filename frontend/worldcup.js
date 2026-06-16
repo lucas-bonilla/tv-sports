@@ -270,8 +270,9 @@ function wcEventRow(e) {
 }
 
 function wcDetailBody(d) {
-  const goals = d.events.filter(e => e.kind === "goal" || e.kind === "penalty" || e.kind === "own_goal");
-  const cards = d.events.filter(e => e.kind === "yellow" || e.kind === "red");
+  const events = d.events || [];
+  const goals = events.filter(e => e.kind === "goal" || e.kind === "penalty" || e.kind === "own_goal");
+  const cards = events.filter(e => e.kind === "yellow" || e.kind === "red");
   const score = (d.home_score != null && d.away_score != null) ? `${d.home_score} - ${d.away_score}` : "vs";
   const info = [
     Number.isFinite(d.round) ? `Jornada ${d.round}` : null,
@@ -284,10 +285,13 @@ function wcDetailBody(d) {
   const totalScore = (d.home_score || 0) + (d.away_score || 0);
   const partial = d.events_source !== "apifootball" && totalScore > goals.length;
 
+  const live = d.status === "live";
+
   return `
+    ${live ? '<div class="wc-detail-live">● EN JUEGO</div>' : ""}
     <div class="wc-detail-score">
       <span class="wc-detail-team">${d.home}${wcFlag(d.home_flag)}</span>
-      <span class="wc-detail-result">${score}</span>
+      <span class="wc-detail-result ${live ? "wc-detail-result--live" : ""}">${score}</span>
       <span class="wc-detail-team">${wcFlag(d.away_flag)}${d.away}</span>
     </div>
     ${goals.length ? `<ul class="wc-detail-list">${goals.map(wcEventRow).join("")}</ul>`
@@ -297,6 +301,9 @@ function wcDetailBody(d) {
     ${partial ? '<div class="wc-detail-partial">⚠ Datos parciales — algunos goles o tarjetas no están disponibles.</div>' : ""}
     ${info.length ? `<div class="wc-detail-info">${info.join(" · ")}</div>` : ""}`;
 }
+
+// Live summaries keep updating while the sheet is open.
+const WC_DETAIL_LIVE_REFRESH_MS = 30000;
 
 async function openWcDetail(matchId) {
   const existing = document.getElementById("wc-detail-modal");
@@ -311,17 +318,31 @@ async function openWcDetail(matchId) {
       <div class="wc-detail-content"><div class="spinner"></div></div>
     </div>`;
   document.body.appendChild(modal);
-  modal.querySelector(".cal-modal-close").addEventListener("click", () => modal.remove());
-  modal.addEventListener("click", e => { if (e.target === modal) modal.remove(); });
+
+  let timer = null;
+  const close = () => { if (timer) clearInterval(timer); modal.remove(); };
+  modal.querySelector(".cal-modal-close").addEventListener("click", close);
+  modal.addEventListener("click", e => { if (e.target === modal) close(); });
 
   const content = modal.querySelector(".wc-detail-content");
-  try {
-    const res = await fetch(`/api/wc/match/${matchId}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    content.innerHTML = wcDetailBody(await res.json());
-  } catch (err) {
-    content.innerHTML = `<div class="wc-detail-empty">No se pudo cargar el resumen.<br/><small>${err.message}</small></div>`;
-  }
+  const load = async () => {
+    try {
+      const res = await fetch(`/api/wc/match/${matchId}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      content.innerHTML = wcDetailBody(data);
+      // Poll only while the match is live; stop once it's finished.
+      if (data.status === "live" && !timer) {
+        timer = setInterval(load, WC_DETAIL_LIVE_REFRESH_MS);
+      } else if (data.status !== "live" && timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    } catch (err) {
+      if (!timer) content.innerHTML = `<div class="wc-detail-empty">No se pudo cargar el resumen.<br/><small>${err.message}</small></div>`;
+    }
+  };
+  await load();
 }
 
 // Contribute the World Cup's days to the shared day bar and re-render on
