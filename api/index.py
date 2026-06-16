@@ -1077,8 +1077,12 @@ def _apifootball_get(path: str, params: dict) -> dict:
     return resp.json() or {}
 
 
-def _apifootball_event(it: dict, home_id) -> dict | None:
-    """Normalize one API-Football fixture event into our compact shape."""
+def _apifootball_event(it: dict, home_norm: str) -> dict | None:
+    """Normalize one API-Football fixture event into our compact shape.
+
+    `home_norm` is the accent-insensitive home-team name; events whose team
+    matches it are flagged as home, so they render on the left rail.
+    """
     type_ = (it.get("type") or "").strip().lower()
     detail = (it.get("detail") or "").strip().lower()
     player = ((it.get("player") or {}).get("name") or "").strip()
@@ -1100,22 +1104,23 @@ def _apifootball_event(it: dict, home_id) -> dict | None:
         if extra:
             minute += extra
     assist = ((it.get("assist") or {}).get("name") or "").strip()
-    team_id = (it.get("team") or {}).get("id")
+    team = ((it.get("team") or {}).get("name") or "").strip()
     return {
         "kind": kind,
         "minute": minute,
         "player": player,
         "assist": assist or None,
-        "home": home_id is not None and team_id == home_id,
-        "team": ((it.get("team") or {}).get("name") or "").strip(),
+        "home": bool(home_norm) and _strip_accents(team) == home_norm,
+        "team": team,
     }
 
 
-def _apifootball_events(fixture_id: str) -> list:
+def _apifootball_events(fixture_id: str, home_en: str | None = None) -> list:
     """Full goals/cards/subs for a fixture from API-Football, sorted by minute.
 
     Returns [] on any failure or when the fixture is unknown there, so the caller
-    can fall back to TheSportsDB's (truncated) timeline.
+    can fall back to TheSportsDB's (truncated) timeline. One request only: the home
+    side is inferred from the team name we already have, not a second fixture call.
     """
     if not _apifootball_enabled() or not fixture_id:
         return []
@@ -1132,61 +1137,10 @@ def _apifootball_events(fixture_id: str) -> list:
         logger.warning(f"API-Football events {fixture_id} returned errors: {errors}")
     raw = data.get("response") or []
     logger.info(f"API-Football events {fixture_id}: results={data.get('results')} events={len(raw)}")
-    # The fixture's home team id isn't on the events; fetch it once so we can flag
-    # which side each event belongs to. Cheap relative to the per-match cache.
-    home_id = None
-    try:
-        finfo = (_apifootball_get("/fixtures", {"id": fixture_id}).get("response") or [None])[0]
-        if finfo:
-            home_id = ((finfo.get("teams") or {}).get("home") or {}).get("id")
-    except Exception as e:
-        logger.warning(f"API-Football fixture {fixture_id} failed: {e}")
-    events = [e for e in (_apifootball_event(it, home_id) for it in raw) if e]
+    home_norm = _strip_accents(home_en or "")
+    events = [e for e in (_apifootball_event(it, home_norm) for it in raw) if e]
     events.sort(key=lambda e: (e["minute"] is None, e["minute"] or 0))
     return events
-
-
-def _apifootball_diag(event_id: str) -> dict:
-    """Inspect what API-Football returns for a match — for troubleshooting only.
-
-    Surfaces the host/header mode, the idAPIfootball we map through, and the raw
-    `errors`/`results` so a bad key, wrong host, or unknown fixture id is obvious.
-    """
-    out: dict = {
-        "enabled": _apifootball_enabled(),
-        "host": API_FOOTBALL_HOST,
-        "mode": "rapidapi" if "rapidapi.com" in API_FOOTBALL_HOST else "direct",
-        "key_present": bool(API_FOOTBALL_KEY),
-    }
-    if not _apifootball_enabled():
-        out["hint"] = "API_FOOTBALL_KEY no está configurada."
-        return out
-    detail = (_wc_get("/lookupevent.php", {"id": event_id}).get("events") or [None])[0]
-    fixture_id = detail.get("idAPIfootball") if detail else None
-    out["idAPIfootball"] = fixture_id
-    if not fixture_id:
-        out["hint"] = "TheSportsDB no expone idAPIfootball para este partido."
-        return out
-    try:
-        data = _apifootball_get("/fixtures/events", {"fixture": fixture_id})
-        out["results"] = data.get("results")
-        out["errors"] = data.get("errors")
-        out["event_count"] = len(data.get("response") or [])
-        sample = (data.get("response") or [])[:3]
-        out["sample"] = [
-            {"min": (e.get("time") or {}).get("elapsed"), "type": e.get("type"),
-             "detail": e.get("detail"), "player": (e.get("player") or {}).get("name"),
-             "team": (e.get("team") or {}).get("name")}
-            for e in sample
-        ]
-        if out["errors"]:
-            out["hint"] = "API-Football devolvió errores (¿key inválida, host equivocado o cuota agotada?)."
-        elif out["event_count"] == 0:
-            out["hint"] = "Sin eventos: el idAPIfootball seguramente no existe en API-Football (datos del Mundial simulados)."
-    except Exception as e:
-        out["exception"] = str(e)
-        out["hint"] = "La llamada falló (host/red). Revisa API_FOOTBALL_HOST."
-    return out
 
 
 def _wc_timeline_entry(it: dict) -> dict | None:
@@ -1251,7 +1205,7 @@ def get_wc_match_detail(event_id: str) -> dict:
     status = _wc_match_status(detail, home_score, away_score)
 
     # Prefer API-Football's complete event list; fall back to TheSportsDB's.
-    events = _apifootball_events(detail.get("idAPIfootball"))
+    events = _apifootball_events(detail.get("idAPIfootball"), home_en)
     source = "apifootball"
     if not events:
         timeline_raw = _wc_get("/lookuptimeline.php", {"id": event_id}).get("timeline") or []
@@ -1507,14 +1461,6 @@ async def wc_match_detail(event_id: str):
     except Exception as e:
         logger.error(f"World Cup match detail {event_id} failed: {e}")
         raise HTTPException(status_code=500, detail="No se pudo cargar el resumen del partido.")
-
-
-@app.get("/api/wc/diag/{event_id}")
-async def wc_match_diag(event_id: str):
-    """Troubleshooting: what does API-Football return for this match's events?"""
-    if not event_id.isdigit():
-        raise HTTPException(status_code=400, detail="Identificador de partido no válido.")
-    return await asyncio.to_thread(_apifootball_diag, event_id)
 
 
 @app.get("/api/health")

@@ -623,4 +623,5 @@ registerDateSource({
   render: () => renderEvents(allEvents, activeFilter),
 });
 
-fetchEvents();
+// Initial load is orchestrated by the page-loader coordinator in index.html so
+// all sections reveal together; fetchEvents() is not auto-invoked here.

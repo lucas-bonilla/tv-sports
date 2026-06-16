@@ -333,5 +333,5 @@ if (typeof registerDateSource === "function") {
   });
 }
 
-// Load on page load (single-page layout, no tab gating).
-fetchWorldCup();
+// Initial load is orchestrated by the page-loader coordinator in index.html so
+// all sections reveal together; fetchWorldCup() is not auto-invoked here.

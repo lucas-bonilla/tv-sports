@@ -265,5 +265,5 @@ function openPadelCalendar(m) {
   if (event && typeof openCalendarModal === "function") openCalendarModal(event);
 }
 
-// Load padel immediately on page load (single-page layout, no tab gating).
-fetchPadelTournaments();
+// Initial load is orchestrated by the page-loader coordinator in index.html so
+// all sections reveal together; fetchPadelTournaments() is not auto-invoked here.

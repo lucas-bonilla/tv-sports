@@ -285,6 +285,23 @@ main {
   margin: 3rem auto;
 }
 
+/* Full-page initial loader: covers the staggered per-section loads until all
+   sections are ready, then fades out (see the coordinator in index.html). */
+.page-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.3s ease;
+}
+.page-loader.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .error-msg {
   text-align: center;
   color: #f85149;

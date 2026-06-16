@@ -10,6 +10,12 @@
   <title>📺 Sports TV</title>
 </head>
 <body>
+  <!-- Full-page loader: hides the staggered per-section loading so the page is
+       revealed once the World Cup, TV schedule and padel data are all ready. -->
+  <div id="page-loader" class="page-loader">
+    <div class="spinner"></div>
+  </div>
+
   <header>
     <h1>📺 Sports TV</h1>
     <div id="date-label" class="date-label">Cargando...</div>
@@ -91,5 +97,25 @@
   <script src="app.js"></script>
   <script src="worldcup.js"></script>
   <script src="padel.js"></script>
+  <script>
+    // Kick off every section's initial load together and only reveal the page
+    // once they've all settled, so no section flashes "no hay datos" first.
+    (function () {
+      var loader = document.getElementById("page-loader");
+      var hide = function () {
+        if (!loader || loader.classList.contains("hidden")) return;
+        loader.classList.add("hidden");
+        setTimeout(function () { loader.remove(); }, 300);
+      };
+      var loaders = [
+        typeof fetchEvents === "function" ? fetchEvents : null,
+        typeof fetchWorldCup === "function" ? fetchWorldCup : null,
+        typeof fetchPadelTournaments === "function" ? fetchPadelTournaments : null,
+      ].filter(Boolean);
+      Promise.allSettled(loaders.map(function (f) { return f(); })).then(hide);
+      // Safety net: never trap the page behind a hung request.
+      setTimeout(hide, 15000);
+    })();
+  </script>
 </body>
 </html>
