@@ -1186,9 +1186,10 @@ def get_wc_match_detail(event_id: str) -> dict:
     source is cached forever in Redis (the per-match registro); a partial one gets
     a short TTL so it can be completed later. Live matches are never persisted.
     """
-    # v2: the key is versioned so detail records cached by an earlier build (which
-    # stored TheSportsDB's truncated timeline) are ignored, not served forever.
-    cache_key = f"wc:match:v2:{event_id}"
+    # v3: the key is versioned so detail records cached by an earlier build (which
+    # stored TheSportsDB's truncated timeline, or lacked the kickoff time) are
+    # ignored, not served forever.
+    cache_key = f"wc:match:v3:{event_id}"
     cached = kv_get_json(cache_key)
     # Serve the cache unless it's a partial (TheSportsDB) record while API-Football
     # is now configured — in that case retry so the key can upgrade it to complete.
@@ -1215,6 +1216,7 @@ def get_wc_match_detail(event_id: str) -> dict:
 
     out = {
         "match_id": event_id,
+        "time": _wc_local_datetime(detail)[1],  # "HH:MM" kickoff, Europe/Madrid
         "home": WC_TEAM_ES.get(home_en, home_en),
         "away": WC_TEAM_ES.get(away_en, away_en),
         "home_flag": _wc_flag(home_en),
