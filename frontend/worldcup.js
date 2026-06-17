@@ -277,6 +277,7 @@ function wcDetailBody(d) {
   const info = [
     Number.isFinite(d.round) ? `Jornada ${d.round}` : null,
     [d.venue, d.city].filter(Boolean).join(", ") || null,
+    d.time ? `${d.time} h` : null,
     d.spectators ? `${d.spectators.toLocaleString("es-ES")} espectadores` : null,
   ].filter(Boolean);
 
