@@ -90,7 +90,7 @@ function renderWcMatches() {
   // Two interactions share the card grid: upcoming matches open the calendar
   // modal; finished matches open a result summary (scorers, cards, venue).
   const activate = card => {
-    if (card.dataset.wcDetail) openWcDetail(card.dataset.wcDetail);
+    if (card.dataset.wcDetail) openWcDetail(card.dataset.wcDetail, card.dataset.wcTime);
     else if (card.dataset.wcEvent) openWcCalendar(JSON.parse(decodeURIComponent(card.dataset.wcEvent)));
   };
   container.onclick = e => {
@@ -141,7 +141,7 @@ function renderWcMatch(m) {
   const competition = Number.isFinite(m.round) ? `Jornada ${m.round}` : "Mundial";
 
   const interaction = detailable
-    ? `data-wc-detail="${m.match_id}" role="button" tabindex="0" title="Ver resumen del partido"`
+    ? `data-wc-detail="${m.match_id}" data-wc-time="${m.time || ""}" role="button" tabindex="0" title="Ver resumen del partido"`
     : addable
       ? `data-wc-event="${payload}" role="button" tabindex="0" title="Añadir al calendario"`
       : "";
@@ -306,7 +306,7 @@ function wcDetailBody(d) {
 // Live summaries keep updating while the sheet is open.
 const WC_DETAIL_LIVE_REFRESH_MS = 30000;
 
-async function openWcDetail(matchId) {
+async function openWcDetail(matchId, time) {
   const existing = document.getElementById("wc-detail-modal");
   if (existing) existing.remove();
 
@@ -331,6 +331,9 @@ async function openWcDetail(matchId) {
       const res = await fetch(`/api/wc/match/${matchId}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      // The detail endpoint doesn't return kickoff time; reuse the value the
+      // list card already has so the info line can show it.
+      if (time && !data.time) data.time = time;
       content.innerHTML = wcDetailBody(data);
       // Poll only while the match is live; stop once it's finished.
       if (data.status === "live" && !timer) {
