@@ -109,13 +109,11 @@ function renderWcMatches() {
 function renderWcMatch(m) {
   const live = m.status === "live";
   const done = m.status === "finished";
-  const hasScore = m.home_score !== null && m.away_score !== null;
+  const hasScore = Number.isFinite(m.home_score) && Number.isFinite(m.away_score);
 
-  // Left column: kickoff time for upcoming, final/live score for played matches —
-  // mirrors the TV-schedule card where the time sits to the left of the title.
-  const lead = (live || done) && hasScore
-    ? `<span class="wc-time-score ${live ? "wc-time-score--live" : ""}">${m.home_score}-${m.away_score}</span>`
-    : (m.time || "—");
+  // Left column always shows the kickoff time; the score for played matches now
+  // sits in the middle of the title, between the two team names.
+  const lead = m.time || "—";
 
   const statusBadge = live
     ? '<span class="wc-badge wc-badge--live">● EN JUEGO</span>'
@@ -134,9 +132,13 @@ function renderWcMatch(m) {
   const winA = done && hasScore && m.home_score > m.away_score;
   const winB = done && hasScore && m.away_score > m.home_score;
 
-  // Single-line title "Home 🏳 - 🏴 Away", with the winner emphasised.
+  // Single-line title "Home 🏳 <score> 🏴 Away": for live/finished matches the
+  // result sits in the middle between the team names; upcoming matches keep "-".
+  const middle = (live || done) && hasScore
+    ? `<span class="wc-time-score ${live ? "wc-time-score--live" : ""}">${m.home_score}-${m.away_score}</span>`
+    : "-";
   const title = `<span class="${winA ? "wc-won" : ""}">${m.home}</span>${wcFlag(m.home_flag)}`
-    + ` - ${wcFlag(m.away_flag)}<span class="${winB ? "wc-won" : ""}">${m.away}</span>`;
+    + ` ${middle} ${wcFlag(m.away_flag)}<span class="${winB ? "wc-won" : ""}">${m.away}</span>`;
 
   const competition = Number.isFinite(m.round) ? `Jornada ${m.round}` : "Mundial";
 
