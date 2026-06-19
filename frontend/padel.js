@@ -73,15 +73,39 @@ async function fetchPadelTournaments() {
     // Build the collapsible season calendar.
     buildPadelCalendar();
 
-    // Land on the live tournament's draw; otherwise show the calendar inline.
+    // Land on the live tournament's draw; otherwise point at the next tournament
+    // from the calendar below.
     if (data.live_slug) {
       showPadelSchedule(data.live_slug);
     } else {
-      container.innerHTML = '<div class="no-results">No hay ningún torneo en directo ahora mismo. Consulta el calendario abajo. 📅</div>';
+      container.innerHTML = renderPadelNextUp();
     }
   } catch (err) {
     container.innerHTML = `<div class="error-msg">❌ Error al cargar pádel.<br/><small>${err.message}</small></div>`;
   }
+}
+
+// When nothing is live, surface the next upcoming tournament from the calendar
+// so the section isn't just an empty placeholder.
+function renderPadelNextUp() {
+  const next = padelTournaments
+    .filter(t => t.status === "upcoming" && t.start_date)
+    .sort((a, b) => new Date(a.start_date) - new Date(b.start_date))[0];
+
+  if (!next) {
+    return '<div class="no-results">No hay ningún torneo en directo ahora mismo. Consulta el calendario abajo. 📅</div>';
+  }
+
+  const name = next.name || next.city || next.country || "";
+  return `
+    <div class="padel-nextup">
+      <div class="padel-nextup-label">Próximo torneo</div>
+      <div class="padel-nextup-row">
+        <span class="padel-nextup-cat">${next.emoji || ""} ${next.category || ""}</span>
+        <span class="padel-nextup-name">${flagImg(next.flag_url)}${name}</span>
+        <span class="padel-nextup-dates">${fmtDateRange(next.start_date, next.end_date)}</span>
+      </div>
+    </div>`;
 }
 
 // --- Season calendar (collapsible) ---

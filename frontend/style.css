@@ -804,6 +804,50 @@ main {
   white-space: nowrap;
 }
 
+/* "Next tournament" callout shown when nothing is live. */
+.padel-nextup {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card-bg);
+  padding: 0.7rem 0.85rem;
+}
+.padel-nextup-label {
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 0.45rem;
+}
+.padel-nextup-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.padel-nextup-cat {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.padel-nextup-name {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 700;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.padel-nextup-dates {
+  font-size: 0.74rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 /* ===== World Cup section ===== */
 
 /* The standings block reuses the padel-calendar layout; these aliases make the
@@ -839,7 +883,11 @@ main {
 .wc-card[data-wc-event]:focus-visible,
 .wc-card[data-wc-detail]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .wc-card--live { border-color: #f85149; box-shadow: 0 0 0 1px rgba(248, 81, 73, 0.4); }
-.wc-card--done { opacity: 0.92; }
+.wc-card--done {
+  border-color: rgba(63, 185, 80, 0.55);
+  box-shadow: 0 0 0 1px rgba(63, 185, 80, 0.35);
+  background: rgba(63, 185, 80, 0.08);
+}
 
 .wc-card .event-match { white-space: normal; }
 .wc-won { font-weight: 800; }
@@ -853,8 +901,10 @@ main {
 
 .wc-time-score {
   font-weight: 800;
+  font-size: 1.15rem;
   letter-spacing: 0.01em;
   font-variant-numeric: tabular-nums;
+  margin: 0 0.1rem;
 }
 .wc-time-score--live { color: #f85149; }
 
