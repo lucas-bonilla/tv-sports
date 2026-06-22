@@ -86,6 +86,10 @@ def kv_set_json(key: str, value, ttl: int | None = None) -> None:
 # --- Scraper ---
 
 MARCA_URL = "https://www.marca.com/programacion-tv.html"
+# Marca's World Cup calendar carries *final scores* per matchday (the TV grid
+# above does not). Used as the score backup when TheSportsDB's free tier omits a
+# played game. See _wc_marca_results().
+MARCA_WC_CALENDAR_URL = "https://www.marca.com/futbol/mundial/calendario.html"
 
 HEADERS = {
     "User-Agent": (
@@ -760,6 +764,108 @@ def _wc_match_from_marca(f: dict) -> dict:
     }
 
 
+_WC_SCORE_RE = re.compile(r"^\s*(\d+)\s*-\s*(\d+)\s*$")
+
+
+def _wc_marca_results() -> list:
+    """Scrape Marca's World Cup calendar for *played* results (home/away/score).
+
+    The score backup: TheSportsDB's free tier truncates finished games (e.g. it
+    never returns Uruguay–Cape Verde), but Marca's calendario.html lists every
+    matchday's final score in a per-jornada table. Cached on its own TTL and fully
+    best-effort — any failure returns the last good copy (or []), so it can never
+    sink the primary fetch. Team names are Marca's Spanish spellings, mapped back
+    to TheSportsDB's English via WC_ES_EN so the records line up with the rest.
+    """
+    now = time.time()
+    cache = _wc_marca_results_cache
+    if cache["data"] is not None and (now - cache["ts"]) < WC_MATCHES_TTL:
+        return cache["data"]
+
+    try:
+        resp = requests.get(MARCA_WC_CALENDAR_URL, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+    except Exception as e:
+        logger.warning(f"Marca World Cup calendar fetch failed: {e}")
+        return cache["data"] or []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    out: list = []
+    for table in soup.select("table.jor.agendas"):
+        # Table id is "jornadaN"; the matchday doubles as the fixture's round.
+        rnd = _wc_int((table.get("id") or "").lower().replace("jornada", ""))
+        for tr in table.select("tbody tr"):
+            score_el = tr.select_one("td.resultado .resultado-partido")
+            if not score_el:
+                continue  # upcoming row: shows fecha/hora instead of a score
+            m = _WC_SCORE_RE.match(score_el.get_text(strip=True))
+            if not m:
+                continue
+            local = tr.select_one("td.local img")
+            visit = tr.select_one("td.visitante img")
+            home_en = WC_ES_EN.get(_strip_accents((local.get("alt") if local else "") or ""))
+            away_en = WC_ES_EN.get(_strip_accents((visit.get("alt") if visit else "") or ""))
+            if not (home_en and away_en):
+                continue  # a team we don't map; skip rather than guess
+            out.append({
+                "home_en": home_en,
+                "away_en": away_en,
+                "round": rnd,
+                "home_score": int(m.group(1)),
+                "away_score": int(m.group(2)),
+            })
+
+    cache["data"] = out
+    cache["ts"] = now
+    return out
+
+
+def _wc_kickoff_passed(m: dict) -> bool:
+    """True when a fixture's Madrid kickoff is in the past — i.e. it should carry
+    a result by now. Used to decide a missing-score match is worth backfilling."""
+    d, t = m.get("date"), m.get("time")
+    if not d:
+        return False
+    try:
+        dt = datetime.strptime(f"{d} {t or '00:00'}", "%Y-%m-%d %H:%M")
+    except ValueError:
+        return False
+    return dt.replace(tzinfo=MADRID_TZ) <= datetime.now(MADRID_TZ)
+
+
+def _wc_backfill_scores(fresh: dict) -> None:
+    """Fill scores TheSportsDB didn't provide from Marca's calendar (in place).
+
+    Stays a genuine fallback: Marca's results page is only fetched when at least
+    one already-kicked-off match is still missing a score, so the steady state
+    (TheSportsDB healthy) adds no extra request. Backfilled scores flow into the
+    persisted registro like any other, so they survive once written.
+    """
+    pending = [m for ms in fresh.values() for m in ms
+               if m.get("home_score") is None and _wc_kickoff_passed(m)]
+    if not pending:
+        return
+
+    by_pair = {}
+    for r in _wc_marca_results():
+        by_pair[_wc_team_pair(r["home_en"], r["away_en"])] = r
+
+    for m in pending:
+        r = by_pair.get(_wc_team_pair(m.get("home_en"), m.get("away_en")))
+        if not r:
+            continue
+        # Align Marca's home/away orientation to this fixture's (sources can swap).
+        if (m.get("home_en") or "").strip().lower() == (r["home_en"] or "").strip().lower():
+            m["home_score"], m["away_score"] = r["home_score"], r["away_score"]
+        else:
+            m["home_score"], m["away_score"] = r["away_score"], r["home_score"]
+        if m.get("round") is None:
+            m["round"] = r["round"]
+        if m.get("status") != "live":
+            m["status"] = "finished"
+        m["source"] = f"{m.get('source') or ''}+marca_result"
+
+
 # How many days ahead the calendar reaches (so "next week" is covered).
 WC_DAYS_AHEAD = int(os.environ.get("WC_DAYS_AHEAD", "8"))
 # When the tournament started — the lower bound for the registro and standings.
@@ -954,6 +1060,11 @@ def get_wc_matches() -> dict:
             if not m.get("channel") and m.get("status") != "finished":
                 m["channel"] = "DAZN MUNDIAL"
         fresh[iso] = _wc_dedup_day(day_matches)
+
+    # Score backup: fill any played-but-scoreless fixture from Marca's calendar
+    # (only fetched when something needs it). Runs before persistence so the
+    # recovered score is written into the registro.
+    _wc_backfill_scores(fresh)
 
     # Overlay the fresh slate onto the persisted registro, then write it back so
     # the history keeps growing. Past days never expire; today/future refresh.
@@ -1257,6 +1368,8 @@ PADEL_SCHEDULE_TTL = 300  # 5 minutes — live scores move fast
 # World Cup caches: full-season fixtures (with results) and standings.
 _wc_matches_cache: dict = {"data": None, "ts": 0.0}
 _wc_standings_cache: dict = {"data": None, "ts": 0.0}
+# Marca calendar results — the score backup, fetched only on demand.
+_wc_marca_results_cache: dict = {"data": None, "ts": 0.0}
 _wc_lock = asyncio.Lock()
 WC_MATCHES_TTL = 300  # 5 minutes — live scores move fast
 WC_STANDINGS_TTL = 900  # 15 minutes — tables update less often
