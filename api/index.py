@@ -1093,7 +1093,115 @@ def _wc_blank_row(team: str) -> dict:
     }
 
 
+# Marca's standings come pre-computed (every played match counted) from Unidad
+# Editorial's sports API — the same feed marca.com/futbol/mundial/clasificacion
+# renders client-side. We prefer it over recomputing from TheSportsDB's free tier,
+# which truncates finished games and so undercounts a team's played matches.
+# site=2 (Marca), type=10 (general table), tournament=0117 (World Cup). The
+# season id is the calendar year the tournament *draw* belongs to, not WC_SEASON.
+WC_STANDINGS_URL = "https://api.unidadeditorial.es/sports/v1/classifications/current/"
+WC_STANDINGS_SEASON = os.environ.get("WC_STANDINGS_SEASON", "2025")
+
+# Map the API's English team names to the keys used in WC_GROUPS / WC_TEAM_ES /
+# WC_TEAM_ISO, so flags, Spanish names and group letters line up. Only the names
+# that don't match verbatim need an entry.
+WC_API_EN = {
+    "Bosnia and Herzegovina": "Bosnia-Herzegovina",
+    "Cape Verde Islands": "Cape Verde",
+    "Congo DR": "DR Congo",
+    "Côte d'Ivoire": "Ivory Coast",
+    "Korea Republic": "South Korea",
+}
+
+
+def _wc_standings_row(rank: dict) -> dict:
+    """Turn one Unidad Editorial rank entry into our table-row shape."""
+    s = rank.get("standing") or {}
+    api_en = (rank.get("alternateCommonNames") or {}).get("enEN") or rank.get("name") or ""
+    team_en = WC_API_EN.get(api_en, api_en)
+
+    def _i(key):
+        return _wc_int(s.get(key)) or 0
+
+    return {
+        # Display name in Spanish (our spelling); fall back to the API's own.
+        "team": WC_TEAM_ES.get(team_en, rank.get("name") or team_en),
+        "flag": _wc_flag(team_en),
+        "played": _i("played"),
+        "win": _i("won"),
+        "draw": _i("drawn"),
+        "loss": _i("lost"),
+        "gf": _i("for"),
+        "ga": _i("against"),
+        "gd": _wc_int(s.get("difference")) or (_i("for") - _i("against")),
+        "points": _i("points"),
+    }
+
+
+def _wc_standings_from_marca() -> dict | None:
+    """Fetch the 12 pre-computed group tables from Marca's classifications API.
+
+    Returns the standings payload, or None on any failure / unexpected shape so
+    the caller can fall back to recomputing from results.
+    """
+    params = {
+        "site": "2", "type": "10", "tournament": "0117",
+        "season": WC_STANDINGS_SEASON,
+    }
+    try:
+        resp = requests.get(WC_STANDINGS_URL, params=params, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        payload = resp.json() or {}
+    except Exception as e:
+        logger.warning(f"Marca World Cup standings fetch failed: {e}")
+        return None
+
+    data = payload.get("data")
+    if not data:
+        return None
+
+    groups_out = []
+    for grp in data:
+        head = grp.get("classificationHead") or {}
+        name = ((head.get("group") or {}).get("name")) or ""
+        ranks = grp.get("rank") or []
+        if not name or not ranks:
+            continue
+        table = [_wc_standings_row(r) for r in ranks]
+        # The API already orders the table, but rank it ourselves so the field is
+        # always present and consistent with the computed fallback.
+        for i, row in enumerate(table, 1):
+            row["rank"] = i
+        groups_out.append({"name": name, "table": table})
+
+    if len(groups_out) < len(WC_GROUPS):
+        # A partial table (e.g. mid-publish) is worse than recomputing; bail out.
+        logger.warning(f"Marca standings returned {len(groups_out)} groups; falling back")
+        return None
+
+    groups_out.sort(key=lambda g: g["name"])
+    return {
+        "season": WC_SEASON,
+        "groups": groups_out,
+        "source": "marca",
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def get_wc_standings() -> dict:
+    """Return the 12 World Cup group tables.
+
+    Primary source is Marca's pre-computed classifications API, which counts every
+    played match; we fall back to recomputing from results only when it's
+    unavailable. See _wc_standings_computed for the fallback details.
+    """
+    marca = _wc_standings_from_marca()
+    if marca:
+        return marca
+    return _wc_standings_computed()
+
+
+def _wc_standings_computed() -> dict:
     """Build the 12 group tables from the played group-stage results.
 
     The free TheSportsDB tier doesn't expose the group draw, so we seed each
@@ -1155,6 +1263,7 @@ def get_wc_standings() -> dict:
     return {
         "season": WC_SEASON,
         "groups": groups_out,
+        "source": "computed",
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
 
