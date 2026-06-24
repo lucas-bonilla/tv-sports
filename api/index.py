@@ -866,6 +866,65 @@ def _wc_backfill_scores(fresh: dict) -> None:
         m["source"] = f"{m.get('source') or ''}+marca_result"
 
 
+def _wc_search_event_id(home_en: str, away_en: str, date_iso: str | None) -> str | None:
+    """Recover a fixture's TheSportsDB idEvent via searchevents.php.
+
+    TheSportsDB's free *listing* endpoints (eventsday/eventsround/eventsseason) are
+    truncated to ~5 events, so a finished match they omit reaches us from Marca with
+    no id — and without an id the card can't open its goals/cards detail. The
+    per-event search endpoint is NOT truncated, so we use it to fill that id back
+    in. Orientation can differ between sources, so we try both home/away spellings
+    and match on the World Cup league + date. Best-effort: any failure returns None.
+    """
+    pair = _wc_team_pair(home_en, away_en)
+    for h, a in ((home_en, away_en), (away_en, home_en)):
+        try:
+            data = _wc_get("/searchevents.php", {"e": f"{h}_vs_{a}", "s": WC_SEASON})
+        except Exception as e:
+            logger.warning(f"World Cup searchevents {h} vs {a} failed: {e}")
+            continue
+        for ev in data.get("event") or data.get("events") or []:
+            if str(ev.get("idLeague")) != WC_LEAGUE_ID:
+                continue
+            if _wc_team_pair(ev.get("strHomeTeam"), ev.get("strAwayTeam")) != pair:
+                continue
+            if date_iso and ev.get("dateEvent") and ev["dateEvent"] != date_iso:
+                # Tolerate the Madrid/UTC date offset of ±1 day before rejecting.
+                try:
+                    delta = abs((datetime.fromisoformat(ev["dateEvent"]).date()
+                                 - datetime.fromisoformat(date_iso).date()).days)
+                except ValueError:
+                    delta = 0
+                if delta > 1:
+                    continue
+            return ev.get("idEvent")
+    return None
+
+
+def _wc_backfill_event_ids(fresh: dict) -> None:
+    """Fill missing TheSportsDB ids on finished matches so their detail can open.
+
+    Only finished fixtures still lacking a match_id are searched (Marca-only
+    records that TheSportsDB's truncated listings dropped), so a healthy fetch adds
+    no extra requests. The recovered id flows into the persisted registro, so the
+    lookup happens once per match and the card stays clickable thereafter.
+    """
+    pending = [m for ms in fresh.values() for m in ms
+               if not m.get("match_id") and m.get("status") == "finished"
+               and m.get("home_en") and m.get("away_en")]
+    # Cap per-call lookups so a cold start over a wide window can't fan out into
+    # dozens of requests against the rate-limited free tier. Any not reached this
+    # time stay pending and are picked up on a later refresh.
+    for m in pending[:WC_ID_SEARCH_LIMIT]:
+        eid = _wc_search_event_id(m["home_en"], m["away_en"], m.get("date"))
+        if eid:
+            m["match_id"] = eid
+            m["source"] = f"{m.get('source') or ''}+search_id"
+
+
+# Max finished-match id lookups per fetch (searchevents.php), to bound the extra
+# requests a wide cold start makes against the rate-limited free tier.
+WC_ID_SEARCH_LIMIT = int(os.environ.get("WC_ID_SEARCH_LIMIT", "8"))
 # How many days ahead the calendar reaches (so "next week" is covered).
 WC_DAYS_AHEAD = int(os.environ.get("WC_DAYS_AHEAD", "8"))
 # When the tournament started — the lower bound for the registro and standings.
@@ -1065,6 +1124,12 @@ def get_wc_matches() -> dict:
     # (only fetched when something needs it). Runs before persistence so the
     # recovered score is written into the registro.
     _wc_backfill_scores(fresh)
+
+    # Id backup: recover TheSportsDB ids for finished matches its truncated
+    # listings dropped, so their goals/cards detail can open. Runs after the score
+    # backfill so a Marca-recovered match (now finished) is searched too, and
+    # before persistence so the id is written into the registro once.
+    _wc_backfill_event_ids(fresh)
 
     # Overlay the fresh slate onto the persisted registro, then write it back so
     # the history keeps growing. Past days never expire; today/future refresh.
