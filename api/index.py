@@ -1538,6 +1538,66 @@ def _wc_apply_winner(m: dict) -> None:
     m["winner"] = winner
 
 
+def _wc_align_bracket(rounds_data: list) -> list:
+    """Reorder matches within each round to create a visually coherent bracket
+    where teams advancing from one round align with their next match.
+    
+    For each round, we try to position matches so that:
+    - Match 0,1 of round N feed into match 0 of round N+1
+    - Match 2,3 of round N feed into match 1 of round N+1
+    - etc.
+    """
+    # Build a map of team -> list of rounds they appear in (ordered by round)
+    team_rounds: dict = {}  # team_en -> [(round_idx, match_idx, is_home)]
+    
+    for round_idx, round_data in enumerate(rounds_data):
+        for match_idx, m in enumerate(round_data["matches"]):
+            home = m.get("home_en", "").strip().lower()
+            away = m.get("away_en", "").strip().lower()
+            if home:
+                team_rounds.setdefault(home, []).append((round_idx, match_idx, True))
+            if away:
+                team_rounds.setdefault(home, []).append((round_idx, match_idx, False))
+    
+    # For each round (starting from r16 going backwards), try to reorder to align with next round
+    for i in range(len(rounds_data) - 1):
+        curr_round = rounds_data[i]
+        next_round = rounds_data[i + 1]
+        
+        if not curr_round["matches"] or not next_round["matches"]:
+            continue
+        
+        # Build a score for each current match based on which next-round match its teams appear in
+        match_scores = []
+        for curr_idx, curr_match in enumerate(curr_round["matches"]):
+            # Find if either team appears in next round
+            home = curr_match.get("home_en", "").strip().lower()
+            away = curr_match.get("away_en", "").strip().lower()
+            
+            min_next_idx = float('inf')
+            for next_idx, next_match in enumerate(next_round["matches"]):
+                next_home = next_match.get("home_en", "").strip().lower()
+                next_away = next_match.get("away_en", "").strip().lower()
+                
+                if home in (next_home, next_away) or away in (next_home, next_away):
+                    min_next_idx = min(min_next_idx, next_idx)
+            
+            # Score: prefer matches whose teams appear early in next round
+            # Secondary: keep original date/time order
+            score = (
+                min_next_idx if min_next_idx != float('inf') else 999,
+                curr_match.get("date") or "9999",
+                curr_match.get("time") or "99:99"
+            )
+            match_scores.append((score, curr_idx, curr_match))
+        
+        # Sort by score and update the round
+        match_scores.sort(key=lambda x: x[0])
+        curr_round["matches"] = [x[2] for x in match_scores]
+    
+    return rounds_data
+
+
 def get_wc_bracket() -> dict:
     """Return the knockout bracket grouped by round (dieciseisavos → final).
 
@@ -1586,6 +1646,9 @@ def get_wc_bracket() -> dict:
             "key": spec["key"], "name": spec["name"], "slots": spec["slots"],
             "date_from": spec["from"], "date_to": spec["to"], "matches": rms,
         })
+    
+    # Align matches across rounds so teams advancing from one round appear near their next match
+    rounds = _wc_align_bracket(rounds)
 
     return {
         "season": WC_SEASON,
