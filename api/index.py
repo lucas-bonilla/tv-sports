@@ -1559,12 +1559,21 @@ def get_wc_bracket() -> dict:
                     matches.append(m)
                     seen.add(key)
 
+    # Group matches by their current round classification (re-evaluated after merge)
+    by_round: dict = {}
+    for m in matches:
+        key = _wc_ko_round_key(m)
+        if key:
+            by_round.setdefault(key, []).append(m)
+    
     rounds = []
     live = False
     for spec in WC_KO_ROUNDS:
-        rms = _wc_dedup_day([m for m in matches if _wc_ko_round_key(m) == spec["key"]])
+        rms = _wc_dedup_day(by_round.get(spec["key"], []))
         rms.sort(key=lambda x: (x.get("date") or "9999", x.get("time") or "99:99", x.get("home") or ""))
         for m in rms:
+            # Recalculate round_name to ensure it matches the current round classification
+            m["round_name"] = _wc_ko_round_name(m)
             _wc_apply_winner(m)
             if m.get("status") == "live":
                 live = True
