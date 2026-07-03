@@ -7,8 +7,18 @@
 
 const WC_MATCHES_URL = "/api/wc/matches";
 const WC_STANDINGS_URL = "/api/wc/standings";
+const WC_BRACKET_URL = "/api/wc/bracket";
 
 let wcDays = [];                 // [{date, matches}]
+
+// The cuadro columns read left→right as the tournament narrows (16→8→4→2→1);
+// the third-place match is a trailing epilogue so it doesn't break the ladder.
+const WC_BRACKET_ORDER = ["r32", "r16", "qf", "sf", "final", "third"];
+
+const WC_MONTHS_ABBR = [
+  "ene", "feb", "mar", "abr", "may", "jun",
+  "jul", "ago", "sep", "oct", "nov", "dic",
+];
 
 // --- Helpers ---
 
@@ -28,9 +38,11 @@ function wcFlag(emoji) {
 
 // --- Bootstrapping ---
 
-async function fetchWorldCup() {
+async function fetchWorldCup(quiet = false) {
   const container = document.getElementById("wc-container");
-  container.innerHTML = '<div class="spinner"></div>';
+  // On a live auto-refresh we keep the current fixtures on screen (no spinner
+  // flash) and just swap in the updated data when it arrives.
+  if (!quiet) container.innerHTML = '<div class="spinner"></div>';
 
   try {
     const res = await fetch(WC_MATCHES_URL);
@@ -59,8 +71,10 @@ async function fetchWorldCup() {
       renderWcMatches();
     }
 
-    // Standings load independently so a failure there doesn't break fixtures.
+    // Standings and the knockout bracket load independently so a failure in
+    // either doesn't break the fixtures.
     fetchWcStandings();
+    fetchWcBracket();
   } catch (err) {
     container.innerHTML = `<div class="error-msg">❌ Error al cargar el Mundial.<br/><small>${err.message}</small></div>`;
   }
@@ -222,6 +236,149 @@ async function fetchWcStandings() {
   }
 }
 
+// --- Knockout bracket (cuadro de la fase eliminatoria) ---
+
+// A short "3 jul · 21:00" label for a bracket card. Either part can be missing.
+function wcBracketWhen(m) {
+  let day = "";
+  if (m.date) {
+    const [y, mo, d] = m.date.split("-").map(Number);
+    if (d && mo) day = `${d} ${WC_MONTHS_ABBR[mo - 1]}`;
+  }
+  return [day, m.time].filter(Boolean).join(" · ");
+}
+
+// One team row inside a matchup card: flag, name, score. `side` is "home"/"away"
+// so the winner of a finished tie can be bolded.
+function wcBracketTeam(m, side) {
+  const name = m[side];
+  const flag = m[`${side}_flag`];
+  const score = m[`${side}_score`];
+  const won = m.winner === side;
+  const hasScore = Number.isFinite(score);
+  return `
+    <div class="wc-br-team ${won ? "wc-br-team--won" : ""}">
+      ${wcFlag(flag)}<span class="wc-br-name">${name || "—"}</span>
+      <span class="wc-br-score">${hasScore ? score : ""}</span>
+    </div>`;
+}
+
+// An empty slot shown before the draw for a round resolves.
+function wcBracketPlaceholder() {
+  return `
+    <div class="wc-br-match wc-br-match--tbd" aria-hidden="true">
+      <div class="wc-br-team"><span class="wc-br-name">Por definir</span></div>
+      <div class="wc-br-team"><span class="wc-br-name">Por definir</span></div>
+    </div>`;
+}
+
+function wcBracketMatch(m) {
+  const live = m.status === "live";
+  const done = m.status === "finished";
+  const when = wcBracketWhen(m);
+  const badge = live
+    ? '<span class="wc-badge wc-badge--live">● EN JUEGO</span>'
+    : done
+      ? '<span class="wc-badge wc-badge--done">FINAL</span>'
+      : "";
+  // Live/finished matches with an id open the same result sheet as the fixtures.
+  const detailable = (done || live) && !!m.match_id;
+  const interaction = detailable
+    ? `data-wc-detail="${m.match_id}" data-wc-time="${m.time || ""}" role="button" tabindex="0" title="Ver resumen del partido"`
+    : "";
+
+  return `
+    <div class="wc-br-match ${live ? "wc-br-match--live" : ""} ${done ? "wc-br-match--done" : ""}" ${interaction}>
+      ${wcBracketTeam(m, "home")}
+      ${wcBracketTeam(m, "away")}
+      <div class="wc-br-foot">
+        ${when ? `<span class="wc-br-when">${when}</span>` : "<span></span>"}
+        ${badge}
+      </div>
+    </div>`;
+}
+
+function wcBracketColumn(round) {
+  const matches = round.matches || [];
+  // Pad the round out to its full slot count so the ladder keeps its shape
+  // before the draw resolves.
+  const pad = Math.max(0, (round.slots || matches.length) - matches.length);
+  const cards = matches.map(wcBracketMatch).join("")
+    + Array.from({ length: pad }, wcBracketPlaceholder).join("");
+  const count = round.slots ? `${matches.length}/${round.slots}` : `${matches.length}`;
+  return `
+    <div class="wc-br-round wc-br-round--${round.key}">
+      <div class="wc-br-round-head">
+        <span class="wc-br-round-name">${round.name}</span>
+        <span class="wc-br-round-count">${count}</span>
+      </div>
+      <div class="wc-br-round-body">${cards}</div>
+    </div>`;
+}
+
+async function fetchWcBracket() {
+  const block = document.getElementById("wc-bracket-block");
+  const scroll = document.getElementById("wc-bracket-scroll");
+  if (!block || !scroll) return;
+
+  try {
+    const res = await fetch(WC_BRACKET_URL);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    if (!data.has_matches) {
+      // Group stage still running — nothing to show yet.
+      block.hidden = true;
+      return;
+    }
+    block.hidden = false;
+
+    const byKey = Object.fromEntries((data.rounds || []).map(r => [r.key, r]));
+    const ordered = WC_BRACKET_ORDER.map(k => byKey[k]).filter(Boolean);
+    scroll.innerHTML = ordered.map(wcBracketColumn).join("");
+
+    const liveTag = document.getElementById("wc-bracket-live-tag");
+    if (liveTag) liveTag.hidden = !data.live;
+
+    // Clicking a played/live match opens the shared result sheet.
+    scroll.onclick = e => {
+      const card = e.target.closest("[data-wc-detail]");
+      if (card) openWcDetail(card.dataset.wcDetail, card.dataset.wcTime);
+    };
+    scroll.onkeydown = e => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      const card = e.target.closest("[data-wc-detail]");
+      if (card) { e.preventDefault(); openWcDetail(card.dataset.wcDetail, card.dataset.wcTime); }
+    };
+  } catch (err) {
+    // The bracket is secondary to the fixtures — hide it silently on failure.
+    block.hidden = true;
+  }
+}
+
+// --- Live auto-refresh ---
+//
+// Keep the fixtures and cuadro in sync as matches finish, without a manual
+// refresh. Polls only while the tab is visible (and refreshes on becoming
+// visible again) so a backgrounded tab doesn't hammer the API.
+const WC_AUTO_REFRESH_MS = 60000;
+let wcAutoRefreshTimer = null;
+
+function wcRefreshLive() {
+  // fetchWorldCup(quiet) also refreshes the bracket and standings.
+  fetchWorldCup(true);
+}
+
+function startWcAutoRefresh() {
+  if (wcAutoRefreshTimer) return;
+  wcAutoRefreshTimer = setInterval(() => {
+    if (document.visibilityState === "visible") wcRefreshLive();
+  }, WC_AUTO_REFRESH_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") wcRefreshLive();
+  });
+}
+
 // --- Calendar integration ---
 
 // Reuse openCalendarModal() from app.js. parseEventDate() there wants a Spanish
@@ -359,6 +516,9 @@ if (typeof registerDateSource === "function") {
     render: () => renderWcMatches(),
   });
 }
+
+// Keep fixtures + cuadro live as matches finish (visibility-aware polling).
+startWcAutoRefresh();
 
 // Initial load is orchestrated by the page-loader coordinator in index.html so
 // all sections reveal together; fetchWorldCup() is not auto-invoked here.

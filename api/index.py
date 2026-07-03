@@ -1333,6 +1333,111 @@ def _wc_standings_computed() -> dict:
     }
 
 
+# --- Knockout bracket (fase eliminatoria / cuadro) ---
+#
+# Once the group stage ends the tournament becomes a single-elimination bracket.
+# TheSportsDB tags each knockout fixture with a special intRound code (Final=125,
+# 3rd place=150, Semi=160, QF=170, R16=180, R32=200), but the free tier is
+# unreliable, so each round also carries the official FIFA 2026 date window as a
+# fallback classifier. Group-stage matchdays (round 1–3, all before 28 Jun) never
+# fall in a knockout window, so date bucketing can't misfile them.
+#
+# `slots` is how many matches the round holds when full (16→8→4→2→1); the frontend
+# pads the round to that many cards with "Por definir" placeholders so the cuadro
+# always shows its full shape even before the draw resolves.
+WC_KO_ROUNDS = [
+    {"key": "r32",   "name": "Dieciseisavos", "code": 200, "from": "2026-06-28", "to": "2026-07-03", "slots": 16},
+    {"key": "r16",   "name": "Octavos",       "code": 180, "from": "2026-07-04", "to": "2026-07-07", "slots": 8},
+    {"key": "qf",    "name": "Cuartos",       "code": 170, "from": "2026-07-09", "to": "2026-07-11", "slots": 4},
+    {"key": "sf",    "name": "Semifinales",   "code": 160, "from": "2026-07-14", "to": "2026-07-15", "slots": 2},
+    {"key": "third", "name": "Tercer puesto", "code": 150, "from": "2026-07-18", "to": "2026-07-18", "slots": 1},
+    {"key": "final", "name": "Final",         "code": 125, "from": "2026-07-19", "to": "2026-07-19", "slots": 1},
+]
+
+_WC_KO_BY_CODE = {spec["code"]: spec["key"] for spec in WC_KO_ROUNDS}
+
+
+def _wc_ko_round_key(m: dict) -> str | None:
+    """Return the knockout-round key a match belongs to, or None if it's not a
+    knockout fixture. Prefers TheSportsDB's round code, falls back to the official
+    date window; group-stage rounds (1–3) are never treated as knockout."""
+    code = m.get("round")
+    if code in _WC_KO_BY_CODE:
+        return _WC_KO_BY_CODE[code]
+    if isinstance(code, int) and 1 <= code <= 3:
+        return None  # a group matchday, even if its date somehow overlaps
+    date = m.get("date")
+    if not date:
+        return None
+    for spec in WC_KO_ROUNDS:
+        if spec["from"] <= date <= spec["to"]:
+            return spec["key"]
+    return None
+
+
+def _wc_apply_winner(m: dict) -> None:
+    """Tag the winning side ('home'/'away') on a finished knockout match so the
+    cuadro can bold it. A draw (decided on penalties, which the free tier doesn't
+    expose) stays undecided."""
+    winner = None
+    if (m.get("status") == "finished"
+            and m.get("home_score") is not None and m.get("away_score") is not None):
+        if m["home_score"] > m["away_score"]:
+            winner = "home"
+        elif m["away_score"] > m["home_score"]:
+            winner = "away"
+    m["winner"] = winner
+
+
+def get_wc_bracket() -> dict:
+    """Return the knockout bracket grouped by round (dieciseisavos → final).
+
+    Reuses the merged, persisted match registro (get_wc_matches) so scores stay
+    live, and unions in any knockout fixtures further out than that window from the
+    persisted history. Every round is always present — empty ones render as
+    placeholders — so the cuadro shows its full shape from the moment the group
+    stage ends.
+    """
+    data = get_wc_matches()
+    matches = [m for day in data["days"] for m in day["matches"]]
+
+    # get_wc_matches only reaches WC_DAYS_AHEAD out, so later rounds (semis, final)
+    # can sit beyond it. Pull the whole tournament span from the persisted registro
+    # and union any knockout fixtures the near window didn't include.
+    start = _wc_season_start_date()
+    history = _wc_load_history(start, start + timedelta(days=45))
+    if history:
+        seen = {(m.get("date"), _wc_team_pair(m.get("home_en"), m.get("away_en"))) for m in matches}
+        for day in history.values():
+            for m in day:
+                key = (m.get("date"), _wc_team_pair(m.get("home_en"), m.get("away_en")))
+                if key not in seen:
+                    matches.append(m)
+                    seen.add(key)
+
+    rounds = []
+    live = False
+    for spec in WC_KO_ROUNDS:
+        rms = _wc_dedup_day([m for m in matches if _wc_ko_round_key(m) == spec["key"]])
+        rms.sort(key=lambda x: (x.get("date") or "9999", x.get("time") or "99:99", x.get("home") or ""))
+        for m in rms:
+            _wc_apply_winner(m)
+            if m.get("status") == "live":
+                live = True
+        rounds.append({
+            "key": spec["key"], "name": spec["name"], "slots": spec["slots"],
+            "date_from": spec["from"], "date_to": spec["to"], "matches": rms,
+        })
+
+    return {
+        "season": WC_SEASON,
+        "has_matches": any(r["matches"] for r in rounds),
+        "live": live,
+        "rounds": rounds,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 # --- Match detail (resumen de partido pasado: goleadores, tarjetas, info) ---
 #
 # The free TheSportsDB tier exposes lookupevent.php (venue, group, spectators) and
@@ -1542,11 +1647,13 @@ PADEL_SCHEDULE_TTL = 300  # 5 minutes — live scores move fast
 # World Cup caches: full-season fixtures (with results) and standings.
 _wc_matches_cache: dict = {"data": None, "ts": 0.0}
 _wc_standings_cache: dict = {"data": None, "ts": 0.0}
+_wc_bracket_cache: dict = {"data": None, "ts": 0.0}
 # Marca calendar results — the score backup, fetched only on demand.
 _wc_marca_results_cache: dict = {"data": None, "ts": 0.0}
 _wc_lock = asyncio.Lock()
 WC_MATCHES_TTL = 300  # 5 minutes — live scores move fast
 WC_STANDINGS_TTL = 900  # 15 minutes — tables update less often
+WC_BRACKET_TTL = 300  # 5 minutes — mirrors the live match cadence
 
 
 # --- FastAPI app ---
@@ -1737,6 +1844,30 @@ async def wc_standings():
                 logger.warning("Returning stale World Cup standings after failure")
                 return c["data"]
             raise HTTPException(status_code=500, detail="No se pudo cargar la clasificación del Mundial.")
+
+
+@app.get("/api/wc/bracket")
+async def wc_bracket():
+    now = time.time()
+    c = _wc_bracket_cache
+    if c["data"] and (now - c["ts"]) < WC_BRACKET_TTL:
+        return c["data"]
+    async with _wc_lock:
+        now = time.time()
+        if c["data"] and (now - c["ts"]) < WC_BRACKET_TTL:
+            return c["data"]
+        try:
+            data = await asyncio.to_thread(get_wc_bracket)
+            c["data"], c["ts"] = data, now
+            total = sum(len(r["matches"]) for r in data["rounds"])
+            logger.info(f"World Cup bracket: {total} knockout matches, live={data['live']}")
+            return data
+        except Exception as e:
+            logger.error(f"World Cup bracket fetch failed: {e}")
+            if c["data"]:
+                logger.warning("Returning stale World Cup bracket after failure")
+                return c["data"]
+            raise HTTPException(status_code=500, detail="No se pudo cargar el cuadro del Mundial.")
 
 
 @app.get("/api/wc/match/{event_id}")

@@ -52,10 +52,17 @@ function buildGlobalDateBar() {
   if (!bar) return;
 
   // Union of every section's ISO days, sorted chronologically.
-  const days = [...new Set(dateSources.flatMap(s => s.getDays()))].filter(Boolean).sort();
-  if (!days.length) { bar.innerHTML = ""; return; }
+  const allDays = [...new Set(dateSources.flatMap(s => s.getDays()))].filter(Boolean).sort();
+  if (!allDays.length) { bar.innerHTML = ""; return; }
 
   const today = todayISO();
+
+  // Past days pile up as the tournament runs; keep the calendar focused by
+  // showing only the 2 most recent past days, plus today and every future day.
+  const PAST_DAYS_SHOWN = 2;
+  const past = allDays.filter(d => d < today).slice(-PAST_DAYS_SHOWN);
+  const todayAndFuture = allDays.filter(d => d >= today);
+  const days = [...past, ...todayAndFuture];
 
   // On first populated build, land on today (or the next available day) so the
   // page opens focused, just like the old per-section default.
