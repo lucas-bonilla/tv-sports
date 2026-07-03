@@ -1493,15 +1493,23 @@ def _wc_ko_round_key(m: dict) -> str | None:
     """Return the knockout-round key a match belongs to, or None if it's not a
     knockout fixture. Gated on the knockout start date so a group matchday (whose
     round number can collide with a knockout team-count code) is never misfiled;
-    within the knockout phase the date window is authoritative, with the
-    team-count round code as a fallback for fixtures outside a listed window."""
+    within the knockout phase the team-count code (intRound) is authoritative, with
+    the date window as a fallback for fixtures without a round code."""
     date = m.get("date")
     if not date or date < WC_KO_START:
         return None  # group stage or undated
+    
+    # First, try the team-count round code (16=Octavos, 8=Cuartos, etc.)
+    round_code = m.get("round")
+    if round_code in _WC_KO_TEAM_CODE:
+        return _WC_KO_TEAM_CODE[round_code]
+    
+    # Fallback: use date window when no round code is available
     for spec in WC_KO_ROUNDS:
         if spec["from"] <= date <= spec["to"]:
             return spec["key"]
-    return _WC_KO_TEAM_CODE.get(m.get("round"))
+    
+    return None
 
 
 def _wc_ko_round_name(m: dict) -> str | None:
