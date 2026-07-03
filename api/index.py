@@ -1496,11 +1496,16 @@ def _wc_ko_round_key(m: dict) -> str | None:
     within the knockout phase the team-count code (intRound) is authoritative, with
     the date window as a fallback for fixtures without a round code."""
     date = m.get("date")
+    round_code = m.get("round")
+    
+    # Exclude group-stage matchdays (1, 2, 3) — these are never knockout fixtures
+    if round_code in (1, 2, 3):
+        return None
+    
     if not date or date < WC_KO_START:
         return None  # group stage or undated
     
     # First, try the team-count round code (16=Octavos, 8=Cuartos, etc.)
-    round_code = m.get("round")
     if round_code in _WC_KO_TEAM_CODE:
         return _WC_KO_TEAM_CODE[round_code]
     
