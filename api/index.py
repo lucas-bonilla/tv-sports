@@ -1470,9 +1470,9 @@ def _wc_standings_computed() -> dict:
 WC_KO_START = "2026-06-28"  # first knockout day; group stage ends 27 Jun
 
 WC_KO_ROUNDS = [
-    {"key": "r32",   "name": "Dieciseisavos", "code": 32, "from": "2026-06-28", "to": "2026-07-03", "slots": 16},
-    {"key": "r16",   "name": "Octavos",       "code": 16, "from": "2026-07-04", "to": "2026-07-07", "slots": 8},
-    {"key": "qf",    "name": "Cuartos",       "code": 8,  "from": "2026-07-09", "to": "2026-07-11", "slots": 4},
+    {"key": "r32",   "name": "Dieciseisavos", "code": 32, "from": "2026-06-28", "to": "2026-07-04", "slots": 16},
+    {"key": "r16",   "name": "Octavos",       "code": 16, "from": "2026-07-05", "to": "2026-07-08", "slots": 8},
+    {"key": "qf",    "name": "Cuartos",       "code": 8,  "from": "2026-07-10", "to": "2026-07-11", "slots": 4},
     {"key": "sf",    "name": "Semifinales",   "code": 4,  "from": "2026-07-14", "to": "2026-07-15", "slots": 2},
     {"key": "third", "name": "Tercer puesto", "code": None, "from": "2026-07-18", "to": "2026-07-18", "slots": 1},
     {"key": "final", "name": "Final",         "code": 2,  "from": "2026-07-19", "to": "2026-07-19", "slots": 1},
