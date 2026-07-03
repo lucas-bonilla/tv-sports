@@ -154,7 +154,7 @@ function renderWcMatch(m) {
   const title = `<span class="${winA ? "wc-won" : ""}">${m.home}</span>${wcFlag(m.home_flag)}`
     + ` ${middle} ${wcFlag(m.away_flag)}<span class="${winB ? "wc-won" : ""}">${m.away}</span>`;
 
-  const competition = Number.isFinite(m.round) ? `Jornada ${m.round}` : "Mundial";
+  const competition = m.round_name || (Number.isFinite(m.round) ? `Jornada ${m.round}` : "Mundial");
 
   const interaction = detailable
     ? `data-wc-detail="${m.match_id}" data-wc-time="${m.time || ""}" role="button" tabindex="0" title="Ver resumen del partido"`
@@ -414,7 +414,7 @@ function wcEventForCalendar(m) {
     sport: "Mundial",
     date: `mundial ${d} de ${WC_MONTHS_ES[mo - 1]}`, // parser reads parts[1]=day, parts[3]=month
     time: m.time,
-    competition: ["Mundial 2026", Number.isFinite(m.round) ? `Jornada ${m.round}` : ""].filter(Boolean).join(" · "),
+    competition: ["Mundial 2026", m.round_name || (Number.isFinite(m.round) ? `Jornada ${m.round}` : "")].filter(Boolean).join(" · "),
     channel: m.channel || m.venue || "",
   };
 }
@@ -451,7 +451,7 @@ function wcDetailBody(d) {
   const cards = events.filter(e => e.kind === "yellow" || e.kind === "red");
   const score = (d.home_score != null && d.away_score != null) ? `${d.home_score} - ${d.away_score}` : "vs";
   const info = [
-    Number.isFinite(d.round) ? `Jornada ${d.round}` : null,
+    d.round_name || (Number.isFinite(d.round) ? `Jornada ${d.round}` : null),
     [d.venue, d.city].filter(Boolean).join(", ") || null,
     d.time ? `${d.time} h` : null,
     d.spectators ? `${d.spectators.toLocaleString("es-ES")} espectadores` : null,

@@ -41,6 +41,15 @@
       <div class="spinner"></div>
     </main>
 
+    <!-- Group standings, collapsed by default -->
+    <div id="wc-standings-block" class="padel-calendar-block" hidden>
+      <button id="wc-standings-toggle" class="padel-calendar-toggle" aria-expanded="false">
+        <span>📊 Clasificación por grupos</span>
+        <span class="chevron">›</span>
+      </button>
+      <div id="wc-standings-body" class="padel-calendar-body" hidden></div>
+    </div>
+
     <!-- Knockout bracket (fase eliminatoria), collapsed by default -->
     <div id="wc-bracket-block" class="padel-calendar-block" hidden>
       <button id="wc-bracket-toggle" class="padel-calendar-toggle" aria-expanded="false">
@@ -50,15 +59,6 @@
       <div id="wc-bracket-body" class="padel-calendar-body" hidden>
         <div id="wc-bracket-scroll" class="wc-bracket-scroll"></div>
       </div>
-    </div>
-
-    <!-- Group standings, collapsed by default -->
-    <div id="wc-standings-block" class="padel-calendar-block" hidden>
-      <button id="wc-standings-toggle" class="padel-calendar-toggle" aria-expanded="false">
-        <span>📊 Clasificación por grupos</span>
-        <span class="chevron">›</span>
-      </button>
-      <div id="wc-standings-body" class="padel-calendar-body" hidden></div>
     </div>
 
     <div id="wc-updated" class="last-updated"></div>

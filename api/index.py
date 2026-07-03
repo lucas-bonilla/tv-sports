@@ -591,7 +591,7 @@ def _wc_normalize_match(ev: dict) -> dict:
     away_score = _wc_int(ev.get("intAwayScore"))
     status = _wc_match_status(ev, home_score, away_score)
     local_date, local_time = _wc_local_datetime(ev)
-    return {
+    m = {
         "match_id": ev.get("idEvent"),
         "date": local_date,
         "time": local_time,  # "HH:MM" in Europe/Madrid
@@ -614,6 +614,9 @@ def _wc_normalize_match(ev: dict) -> dict:
         "channel": None,  # filled from Marca's TV schedule when the match is listed
         "source": "thesportsdb",
     }
+    # Add round_name for knockout matches (will be computed after date is set)
+    m["round_name"] = _wc_ko_round_name(m)
+    return m
 
 
 # TheSportsDB names teams in English; Marca's TV schedule uses Spanish. Map the
@@ -748,7 +751,7 @@ def _wc_match_from_marca(f: dict) -> dict:
     """Build a normalized (upcoming) match record from a Marca-only fixture —
     one TheSportsDB didn't return. No id/score; it's a not-yet-played match."""
     home_en, away_en = f["home_en"], f["away_en"]
-    return {
+    m = {
         "match_id": None,
         "date": f["date"],
         "time": f.get("time") or "",
@@ -769,6 +772,8 @@ def _wc_match_from_marca(f: dict) -> dict:
         "channel": f.get("channel"),
         "source": "marca",
     }
+    m["round_name"] = _wc_ko_round_name(m)
+    return m
 
 
 def _wc_ue_status(period: dict) -> str:
@@ -817,7 +822,7 @@ def _wc_ue_match(ev: dict) -> dict | None:
         date_iso, time_hm = None, ""
 
     loc = se.get("location") or {}
-    return {
+    m = {
         # No TheSportsDB idEvent here; _wc_backfill_event_ids can recover it later
         # for finished matches so the detail sheet still opens.
         "match_id": None,
@@ -840,6 +845,8 @@ def _wc_ue_match(ev: dict) -> dict | None:
         "channel": None,
         "source": "marca_ue",
     }
+    m["round_name"] = _wc_ko_round_name(m)
+    return m
 
 
 def _wc_ue_events(date_iso: str) -> list:
@@ -1479,6 +1486,7 @@ WC_KO_ROUNDS = [
 ]
 
 _WC_KO_TEAM_CODE = {spec["code"]: spec["key"] for spec in WC_KO_ROUNDS if spec["code"] is not None}
+_WC_KO_NAME = {spec["key"]: spec["name"] for spec in WC_KO_ROUNDS}
 
 
 def _wc_ko_round_key(m: dict) -> str | None:
@@ -1494,6 +1502,13 @@ def _wc_ko_round_key(m: dict) -> str | None:
         if spec["from"] <= date <= spec["to"]:
             return spec["key"]
     return _WC_KO_TEAM_CODE.get(m.get("round"))
+
+
+def _wc_ko_round_name(m: dict) -> str | None:
+    """Return the human-readable name of the knockout round (e.g. 'Octavos'), 
+    or None if it's a group stage match."""
+    ko_key = _wc_ko_round_key(m)
+    return _WC_KO_NAME.get(ko_key) if ko_key else None
 
 
 def _wc_apply_winner(m: dict) -> None:
@@ -1725,8 +1740,10 @@ def get_wc_match_detail(event_id: str) -> dict:
         events.sort(key=lambda e: (e["minute"] is None, e["minute"] or 0))
         source = "thesportsdb"
 
+    date_iso = _wc_local_datetime(detail)[0]
     out = {
         "match_id": event_id,
+        "date": date_iso,
         "time": _wc_local_datetime(detail)[1],  # "HH:MM" kickoff, Europe/Madrid
         "home": WC_TEAM_ES.get(home_en, home_en),
         "away": WC_TEAM_ES.get(away_en, away_en),
@@ -1744,6 +1761,7 @@ def get_wc_match_detail(event_id: str) -> dict:
         "events_source": source,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
+    out["round_name"] = _wc_ko_round_name(out)
     # Persist only finished matches. Forever when the event list is complete
     # (API-Football); briefly when it's the truncated TheSportsDB fallback.
     if status == "finished":
