@@ -318,6 +318,8 @@ function wcBracketColumn(round) {
 
 async function fetchWcBracket() {
   const block = document.getElementById("wc-bracket-block");
+  const body = document.getElementById("wc-bracket-body");
+  const toggle = document.getElementById("wc-bracket-toggle");
   const scroll = document.getElementById("wc-bracket-scroll");
   if (!block || !scroll) return;
 
@@ -337,8 +339,12 @@ async function fetchWcBracket() {
     const ordered = WC_BRACKET_ORDER.map(k => byKey[k]).filter(Boolean);
     scroll.innerHTML = ordered.map(wcBracketColumn).join("");
 
+    // The live pill sits in the toggle label so it's visible while collapsed.
     const liveTag = document.getElementById("wc-bracket-live-tag");
-    if (liveTag) liveTag.hidden = !data.live;
+    if (liveTag) {
+      liveTag.textContent = data.live ? "🔴 EN JUEGO" : "";
+      liveTag.hidden = !data.live;
+    }
 
     // Clicking a played/live match opens the shared result sheet.
     scroll.onclick = e => {
@@ -350,6 +356,17 @@ async function fetchWcBracket() {
       const card = e.target.closest("[data-wc-detail]");
       if (card) { e.preventDefault(); openWcDetail(card.dataset.wcDetail, card.dataset.wcTime); }
     };
+
+    // Collapse/expand, bound once (mirrors the group-standings block).
+    if (toggle && !toggle.dataset.bound) {
+      toggle.dataset.bound = "1";
+      toggle.addEventListener("click", () => {
+        const open = body.hidden;
+        body.hidden = !open;
+        toggle.setAttribute("aria-expanded", String(open));
+        toggle.classList.toggle("open", open);
+      });
+    }
   } catch (err) {
     // The bracket is secondary to the fixtures — hide it silently on failure.
     block.hidden = true;

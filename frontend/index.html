@@ -41,13 +41,15 @@
       <div class="spinner"></div>
     </main>
 
-    <!-- Knockout bracket (fase eliminatoria) -->
-    <div id="wc-bracket-block" class="wc-bracket-block" hidden>
-      <div class="wc-bracket-head">
-        <h3 class="wc-bracket-title">🏆 Fase eliminatoria</h3>
-        <span id="wc-bracket-live-tag" class="section-live-tag" hidden></span>
+    <!-- Knockout bracket (fase eliminatoria), collapsed by default -->
+    <div id="wc-bracket-block" class="padel-calendar-block" hidden>
+      <button id="wc-bracket-toggle" class="padel-calendar-toggle" aria-expanded="false">
+        <span>🏆 Fase eliminatoria <span id="wc-bracket-live-tag" class="section-live-tag" hidden></span></span>
+        <span class="chevron">›</span>
+      </button>
+      <div id="wc-bracket-body" class="padel-calendar-body" hidden>
+        <div id="wc-bracket-scroll" class="wc-bracket-scroll"></div>
       </div>
-      <div id="wc-bracket-scroll" class="wc-bracket-scroll"></div>
     </div>
 
     <!-- Group standings, collapsed by default -->
