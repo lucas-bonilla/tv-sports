@@ -90,6 +90,13 @@ MARCA_URL = "https://www.marca.com/programacion-tv.html"
 # above does not). Used as the score backup when TheSportsDB's free tier omits a
 # played game. See _wc_marca_results().
 MARCA_WC_CALENDAR_URL = "https://www.marca.com/futbol/mundial/calendario.html"
+# Marca's results widget (marca.com/resultados/futbol/mundial.html) is a JS
+# component (ueSchedule) that reads a per-day events feed from Unidad Editorial's
+# sports API — the same backend as the standings. Unlike TheSportsDB's free tier
+# it's complete (every match of the day) and unthrottled, so we use it as the
+# fixture/result fallback whenever TheSportsDB rate-limits (429) a day. The
+# "preset" id is the World Cup schedule preset the widget embeds in the page.
+MARCA_UE_EVENTS_URL = "https://api.unidadeditorial.es/sports/v1/events/preset/171_d2689d59"
 
 HEADERS = {
     "User-Agent": (
@@ -764,6 +771,99 @@ def _wc_match_from_marca(f: dict) -> dict:
     }
 
 
+def _wc_ue_status(period: dict) -> str:
+    """Map a Unidad Editorial `score.period` to upcoming / live / finished.
+
+    Observed ids: 0 = not started, 100 = ended. Anything in between is a live
+    period (halves, half-time); >100 covers extra time / penalties, still played.
+    """
+    pid = _wc_int((period or {}).get("id"))
+    if pid is None or pid == 0:
+        return "upcoming"
+    if pid >= 100:
+        return "finished"
+    return "live"
+
+
+def _wc_ue_match(ev: dict) -> dict | None:
+    """Normalize one Unidad Editorial event into our match shape (English names
+    mapped to TheSportsDB's spelling so it merges with the rest). Returns None when
+    a side can't be identified."""
+    se = ev.get("sportEvent") or {}
+    comp = se.get("competitors") or {}
+    h, a = comp.get("homeTeam") or {}, comp.get("awayTeam") or {}
+    home_api = (h.get("alternateCommonNames") or {}).get("enEN") or h.get("commonName")
+    away_api = (a.get("alternateCommonNames") or {}).get("enEN") or a.get("commonName")
+    if not home_api or not away_api:
+        return None
+    home_en = WC_API_EN.get(home_api, home_api)
+    away_en = WC_API_EN.get(away_api, away_api)
+
+    score = ev.get("score") or {}
+    status = _wc_ue_status(score.get("period"))
+    home_score = _wc_int((score.get("homeTeam") or {}).get("totalScore"))
+    away_score = _wc_int((score.get("awayTeam") or {}).get("totalScore"))
+    # UE reports "0"–"0" for not-started matches; don't surface a phantom result.
+    if status == "upcoming":
+        home_score = away_score = None
+
+    ts = _padel_parse_utc(ev.get("startDate"))
+    if ts is not None:
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        local = ts.astimezone(MADRID_TZ)
+        date_iso, time_hm = local.strftime("%Y-%m-%d"), local.strftime("%H:%M")
+    else:
+        date_iso, time_hm = None, ""
+
+    loc = se.get("location") or {}
+    return {
+        # No TheSportsDB idEvent here; _wc_backfill_event_ids can recover it later
+        # for finished matches so the detail sheet still opens.
+        "match_id": None,
+        "date": date_iso,
+        "time": time_hm,
+        "timestamp": ev.get("startDate"),
+        "round": None,  # UE doesn't expose the round; date windows classify KO ties
+        "home": WC_TEAM_ES.get(home_en, home_en),
+        "away": WC_TEAM_ES.get(away_en, away_en),
+        "home_en": home_en,
+        "away_en": away_en,
+        "home_flag": _wc_flag(home_en),
+        "away_flag": _wc_flag(away_en),
+        "home_score": home_score,
+        "away_score": away_score,
+        "status": status,
+        "venue": loc.get("name"),
+        "country": loc.get("address"),
+        "postponed": False,
+        "channel": None,
+        "source": "marca_ue",
+    }
+
+
+def _wc_ue_events(date_iso: str) -> list:
+    """Fetch a single day's World Cup matches from Unidad Editorial's events feed.
+
+    Best-effort: any failure (or an unexpected shape) returns [] so it can never
+    sink the primary fetch. This is the fallback used when TheSportsDB 429s a day.
+    """
+    try:
+        resp = requests.get(MARCA_UE_EVENTS_URL, params={"date": date_iso},
+                            headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        payload = resp.json() or {}
+    except Exception as e:
+        logger.warning(f"Marca UE events {date_iso} failed: {e}")
+        return []
+    out = []
+    for ev in payload.get("data") or []:
+        m = _wc_ue_match(ev)
+        if m and m.get("home_en") and m.get("away_en"):
+            out.append(m)
+    return out
+
+
 _WC_SCORE_RE = re.compile(r"^\s*(\d+)\s*-\s*(\d+)\s*$")
 
 
@@ -965,7 +1065,7 @@ def _wc_event_rank(ev: dict) -> int:
     return 0
 
 
-def _wc_collect_events(start_date, end_date) -> list:
+def _wc_collect_events(start_date, end_date, failed_out: set | None = None) -> list:
     """Gather fixtures for [start_date, end_date] (UTC dates, inclusive).
 
     The free TheSportsDB tier serves no single complete source:
@@ -986,6 +1086,8 @@ def _wc_collect_events(start_date, end_date) -> list:
             raw += _wc_get("/eventsday.php", {"d": iso, "l": WC_LEAGUE_ID}).get("events") or []
         except Exception as e:
             logger.warning(f"World Cup eventsday {iso} failed: {e}")
+            if failed_out is not None:
+                failed_out.add(iso)
         d += timedelta(days=1)
 
     # Results endpoints fill in finished games that eventsday omits.
@@ -1089,7 +1191,8 @@ def get_wc_matches() -> dict:
     # each side: a kickoff stored under a UTC date can land on the adjacent Madrid
     # day. Don't fetch days before the tournament started.
     fetch_from = max(season_start, yesterday - timedelta(days=1))
-    events = _wc_collect_events(fetch_from, last + timedelta(days=1))
+    failed_days: set = set()
+    events = _wc_collect_events(fetch_from, last + timedelta(days=1), failed_days)
     marca = _wc_marca_fixtures()
 
     today_iso = today.isoformat()
@@ -1108,6 +1211,23 @@ def get_wc_matches() -> dict:
         if (f["date"], _wc_team_pair(f["home_en"], f["away_en"])) in seen:
             continue
         fresh.setdefault(f["date"], []).append(_wc_match_from_marca(f))
+
+    # Rate-limit fallback: for any day TheSportsDB failed (429), pull that day's
+    # complete slate from Unidad Editorial's events feed (the source behind Marca's
+    # results page) so a throttled free tier doesn't leave the calendar empty. New
+    # pairs are added; duplicates are merged by the per-day dedup below.
+    for iso in sorted(d for d in failed_days if min_date <= d <= max_date):
+        for m in _wc_ue_events(iso):
+            md = m.get("date")
+            if not md or not (min_date <= md <= max_date):
+                continue
+            key = (md, _wc_team_pair(m["home_en"], m["away_en"]))
+            if key in seen:
+                # Let _wc_dedup_day reconcile it with the copy already present.
+                fresh.setdefault(md, []).append(m)
+            else:
+                fresh.setdefault(md, []).append(m)
+                seen.add(key)
 
     # Attach channels (Marca grid, else DAZN fallback for upcoming) and dedup.
     for iso, day_matches in fresh.items():
@@ -1336,43 +1456,44 @@ def _wc_standings_computed() -> dict:
 # --- Knockout bracket (fase eliminatoria / cuadro) ---
 #
 # Once the group stage ends the tournament becomes a single-elimination bracket.
-# TheSportsDB tags each knockout fixture with a special intRound code (Final=125,
-# 3rd place=150, Semi=160, QF=170, R16=180, R32=200), but the free tier is
-# unreliable, so each round also carries the official FIFA 2026 date window as a
-# fallback classifier. Group-stage matchdays (round 1–3, all before 28 Jun) never
-# fall in a knockout window, so date bucketing can't misfile them.
+# TheSportsDB tags each knockout fixture with a *team-count* intRound code —
+# 32=Dieciseisavos, 16=Octavos, 8=Cuartos, 4=Semis, 2=Final (the third-place
+# match shares 2 and is separated only by date). Note the Final's code 2 collides
+# with a group matchday number, so classification is gated on the knockout start
+# date: nothing before 28 Jun is knockout, and within the knockout phase the
+# official FIFA 2026 date windows are authoritative (with the team-count code as a
+# fallback for a fixture that lands outside its listed window, e.g. a reschedule).
 #
 # `slots` is how many matches the round holds when full (16→8→4→2→1); the frontend
 # pads the round to that many cards with "Por definir" placeholders so the cuadro
 # always shows its full shape even before the draw resolves.
+WC_KO_START = "2026-06-28"  # first knockout day; group stage ends 27 Jun
+
 WC_KO_ROUNDS = [
-    {"key": "r32",   "name": "Dieciseisavos", "code": 200, "from": "2026-06-28", "to": "2026-07-03", "slots": 16},
-    {"key": "r16",   "name": "Octavos",       "code": 180, "from": "2026-07-04", "to": "2026-07-07", "slots": 8},
-    {"key": "qf",    "name": "Cuartos",       "code": 170, "from": "2026-07-09", "to": "2026-07-11", "slots": 4},
-    {"key": "sf",    "name": "Semifinales",   "code": 160, "from": "2026-07-14", "to": "2026-07-15", "slots": 2},
-    {"key": "third", "name": "Tercer puesto", "code": 150, "from": "2026-07-18", "to": "2026-07-18", "slots": 1},
-    {"key": "final", "name": "Final",         "code": 125, "from": "2026-07-19", "to": "2026-07-19", "slots": 1},
+    {"key": "r32",   "name": "Dieciseisavos", "code": 32, "from": "2026-06-28", "to": "2026-07-03", "slots": 16},
+    {"key": "r16",   "name": "Octavos",       "code": 16, "from": "2026-07-04", "to": "2026-07-07", "slots": 8},
+    {"key": "qf",    "name": "Cuartos",       "code": 8,  "from": "2026-07-09", "to": "2026-07-11", "slots": 4},
+    {"key": "sf",    "name": "Semifinales",   "code": 4,  "from": "2026-07-14", "to": "2026-07-15", "slots": 2},
+    {"key": "third", "name": "Tercer puesto", "code": None, "from": "2026-07-18", "to": "2026-07-18", "slots": 1},
+    {"key": "final", "name": "Final",         "code": 2,  "from": "2026-07-19", "to": "2026-07-19", "slots": 1},
 ]
 
-_WC_KO_BY_CODE = {spec["code"]: spec["key"] for spec in WC_KO_ROUNDS}
+_WC_KO_TEAM_CODE = {spec["code"]: spec["key"] for spec in WC_KO_ROUNDS if spec["code"] is not None}
 
 
 def _wc_ko_round_key(m: dict) -> str | None:
     """Return the knockout-round key a match belongs to, or None if it's not a
-    knockout fixture. Prefers TheSportsDB's round code, falls back to the official
-    date window; group-stage rounds (1–3) are never treated as knockout."""
-    code = m.get("round")
-    if code in _WC_KO_BY_CODE:
-        return _WC_KO_BY_CODE[code]
-    if isinstance(code, int) and 1 <= code <= 3:
-        return None  # a group matchday, even if its date somehow overlaps
+    knockout fixture. Gated on the knockout start date so a group matchday (whose
+    round number can collide with a knockout team-count code) is never misfiled;
+    within the knockout phase the date window is authoritative, with the
+    team-count round code as a fallback for fixtures outside a listed window."""
     date = m.get("date")
-    if not date:
-        return None
+    if not date or date < WC_KO_START:
+        return None  # group stage or undated
     for spec in WC_KO_ROUNDS:
         if spec["from"] <= date <= spec["to"]:
             return spec["key"]
-    return None
+    return _WC_KO_TEAM_CODE.get(m.get("round"))
 
 
 def _wc_apply_winner(m: dict) -> None:
