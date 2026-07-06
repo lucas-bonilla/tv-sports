@@ -283,9 +283,16 @@ function wcBracketMatch(m) {
       : "";
   // Live/finished matches with an id open the same result sheet as the fixtures.
   const detailable = (done || live) && !!m.match_id;
+  // Upcoming crosses with a real kickoff can be added to the calendar, same as
+  // the day-by-day fixture cards (a synthesized cross has no date yet, so it
+  // can't be scheduled until the source publishes one).
+  const addable = !live && !done && !m.postponed && !!m.time && !!m.date;
+  const payload = addable ? encodeURIComponent(JSON.stringify(m)) : "";
   const interaction = detailable
     ? `data-wc-detail="${m.match_id}" data-wc-time="${m.time || ""}" role="button" tabindex="0" title="Ver resumen del partido"`
-    : "";
+    : addable
+      ? `data-wc-event="${payload}" role="button" tabindex="0" title="Añadir al calendario"`
+      : "";
 
   return `
     <div class="wc-br-match ${live ? "wc-br-match--live" : ""} ${done ? "wc-br-match--done" : ""}" ${interaction}>
@@ -346,15 +353,20 @@ async function fetchWcBracket() {
       liveTag.hidden = !data.live;
     }
 
-    // Clicking a played/live match opens the shared result sheet.
+    // Clicking a played/live match opens the shared result sheet; an upcoming
+    // cross with a kickoff opens the calendar modal instead.
+    const activateBracketCard = card => {
+      if (card.dataset.wcDetail) openWcDetail(card.dataset.wcDetail, card.dataset.wcTime);
+      else if (card.dataset.wcEvent) openWcCalendar(JSON.parse(decodeURIComponent(card.dataset.wcEvent)));
+    };
     scroll.onclick = e => {
-      const card = e.target.closest("[data-wc-detail]");
-      if (card) openWcDetail(card.dataset.wcDetail, card.dataset.wcTime);
+      const card = e.target.closest("[data-wc-event],[data-wc-detail]");
+      if (card) activateBracketCard(card);
     };
     scroll.onkeydown = e => {
       if (e.key !== "Enter" && e.key !== " ") return;
-      const card = e.target.closest("[data-wc-detail]");
-      if (card) { e.preventDefault(); openWcDetail(card.dataset.wcDetail, card.dataset.wcTime); }
+      const card = e.target.closest("[data-wc-event],[data-wc-detail]");
+      if (card) { e.preventDefault(); activateBracketCard(card); }
     };
 
     // Collapse/expand, bound once (mirrors the group-standings block).
