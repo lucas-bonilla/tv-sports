@@ -1538,63 +1538,103 @@ def _wc_apply_winner(m: dict) -> None:
     m["winner"] = winner
 
 
+def _wc_ko_team(m: dict, side: str) -> str:
+    return (m.get(f"{side}_en") or "").strip().lower()
+
+
+def _align_round_to_next(curr_round: dict, next_round: dict) -> None:
+    """Reorder curr_round's matches so the pair feeding a given next-round match
+    sit adjacent, in the same left-to-right order as that next-round match — the
+    property `.wc-br-round-body`'s `justify-content: space-around` relies on to
+    center each card against the two matches that feed it."""
+    if not curr_round["matches"] or not next_round["matches"]:
+        return
+
+    match_scores = []
+    for curr_idx, curr_match in enumerate(curr_round["matches"]):
+        home = _wc_ko_team(curr_match, "home")
+        away = _wc_ko_team(curr_match, "away")
+
+        min_next_idx = float('inf')
+        for next_idx, next_match in enumerate(next_round["matches"]):
+            next_home = _wc_ko_team(next_match, "home")
+            next_away = _wc_ko_team(next_match, "away")
+            if home in (next_home, next_away) or away in (next_home, next_away):
+                min_next_idx = min(min_next_idx, next_idx)
+
+        # Score: prefer matches whose teams appear early in next round.
+        # Secondary: keep original date/time order (also groups yet-unmatched
+        # bracket siblings, which are normally played back-to-back).
+        score = (
+            min_next_idx if min_next_idx != float('inf') else 999,
+            curr_match.get("date") or "9999",
+            curr_match.get("time") or "99:99",
+        )
+        match_scores.append((score, curr_idx, curr_match))
+
+    match_scores.sort(key=lambda x: x[0])
+    curr_round["matches"] = [x[2] for x in match_scores]
+
+
+def _wc_synthesize_next_round(curr_round: dict, next_round: dict) -> None:
+    """When two sibling matches in curr_round are both finished but the next
+    round doesn't have a real fixture for their winners yet (the data source
+    hasn't published that date), add a placeholder card naming the two winners
+    instead of leaving a blank 'Por definir' slot."""
+    if not curr_round["matches"] or next_round.get("slots") is None:
+        return
+
+    next_teams = set()
+    for nm in next_round["matches"]:
+        next_teams.add(_wc_ko_team(nm, "home"))
+        next_teams.add(_wc_ko_team(nm, "away"))
+
+    pending = []
+    for m in curr_round["matches"]:
+        if m.get("winner") not in ("home", "away"):
+            continue
+        if _wc_ko_team(m, m["winner"]) not in next_teams:
+            pending.append(m)
+
+    for i in range(0, len(pending) - 1, 2):
+        if len(next_round["matches"]) >= next_round["slots"]:
+            break
+        a, b = pending[i], pending[i + 1]
+        wa, wb = a["winner"], b["winner"]
+        next_round["matches"].append({
+            "match_id": None,
+            "date": None, "time": None, "timestamp": None,
+            "round": None, "round_name": next_round["name"],
+            "home": a[f"{wa}"], "home_en": a[f"{wa}_en"], "home_flag": a[f"{wa}_flag"],
+            "home_score": None,
+            "away": b[f"{wb}"], "away_en": b[f"{wb}_en"], "away_flag": b[f"{wb}_flag"],
+            "away_score": None,
+            "status": "upcoming", "postponed": False,
+            "venue": None, "country": None, "channel": None,
+            "source": "synthetic", "winner": None,
+        })
+
+
 def _wc_align_bracket(rounds_data: list) -> list:
     """Reorder matches within each round to create a visually coherent bracket
-    where teams advancing from one round align with their next match.
-    
-    For each round, we try to position matches so that:
-    - Match 0,1 of round N feed into match 0 of round N+1
-    - Match 2,3 of round N feed into match 1 of round N+1
-    - etc.
+    where teams advancing from one round align with their next match, then fill
+    in next-round crosses that are already decided but not yet in the data
+    source (e.g. two octavos winners whose cuartos fixture has no date yet).
+
+    Only the winner-advancement chain (r32 -> r16 -> qf -> sf -> final) forms a
+    ladder; "third" is fed by the semifinal *losers*, not the chain's winners,
+    so it's excluded from the chain entirely.
     """
-    # Build a map of team -> list of rounds they appear in (ordered by round)
-    team_rounds: dict = {}  # team_en -> [(round_idx, match_idx, is_home)]
-    
-    for round_idx, round_data in enumerate(rounds_data):
-        for match_idx, m in enumerate(round_data["matches"]):
-            home = m.get("home_en", "").strip().lower()
-            away = m.get("away_en", "").strip().lower()
-            if home:
-                team_rounds.setdefault(home, []).append((round_idx, match_idx, True))
-            if away:
-                team_rounds.setdefault(home, []).append((round_idx, match_idx, False))
-    
-    # For each round (starting from r16 going backwards), try to reorder to align with next round
-    for i in range(len(rounds_data) - 1):
-        curr_round = rounds_data[i]
-        next_round = rounds_data[i + 1]
-        
-        if not curr_round["matches"] or not next_round["matches"]:
-            continue
-        
-        # Build a score for each current match based on which next-round match its teams appear in
-        match_scores = []
-        for curr_idx, curr_match in enumerate(curr_round["matches"]):
-            # Find if either team appears in next round
-            home = curr_match.get("home_en", "").strip().lower()
-            away = curr_match.get("away_en", "").strip().lower()
-            
-            min_next_idx = float('inf')
-            for next_idx, next_match in enumerate(next_round["matches"]):
-                next_home = next_match.get("home_en", "").strip().lower()
-                next_away = next_match.get("away_en", "").strip().lower()
-                
-                if home in (next_home, next_away) or away in (next_home, next_away):
-                    min_next_idx = min(min_next_idx, next_idx)
-            
-            # Score: prefer matches whose teams appear early in next round
-            # Secondary: keep original date/time order
-            score = (
-                min_next_idx if min_next_idx != float('inf') else 999,
-                curr_match.get("date") or "9999",
-                curr_match.get("time") or "99:99"
-            )
-            match_scores.append((score, curr_idx, curr_match))
-        
-        # Sort by score and update the round
-        match_scores.sort(key=lambda x: x[0])
-        curr_round["matches"] = [x[2] for x in match_scores]
-    
+    by_key = {r["key"]: r for r in rounds_data}
+    chain = [by_key[k] for k in ("r32", "r16", "qf", "sf", "final") if k in by_key]
+
+    # Align back-to-front: each round is aligned against a next round that is
+    # already in its final order, instead of one whose order is about to change.
+    for i in range(len(chain) - 2, -1, -1):
+        _align_round_to_next(chain[i], chain[i + 1])
+    for i in range(len(chain) - 1):
+        _wc_synthesize_next_round(chain[i], chain[i + 1])
+
     return rounds_data
 
 
