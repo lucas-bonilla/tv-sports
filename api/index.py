@@ -1542,6 +1542,20 @@ def _wc_ko_team(m: dict, side: str) -> str:
     return (m.get(f"{side}_en") or "").strip().lower()
 
 
+def _wc_feeder_slot(m: dict, prev_round: dict) -> int:
+    """Position `m` should occupy in its round, derived from where its team
+    came from in `prev_round`'s already-ordered match list — match i of the
+    previous round always feeds slot i//2 of this one. Falls back to a
+    sentinel that sorts last when neither team is found there (e.g. the
+    previous round hasn't been played yet, or this is a group-stage seed)."""
+    home, away = _wc_ko_team(m, "home"), _wc_ko_team(m, "away")
+    for idx, pm in enumerate(prev_round["matches"]):
+        ph, pa = _wc_ko_team(pm, "home"), _wc_ko_team(pm, "away")
+        if home in (ph, pa) or away in (ph, pa):
+            return idx // 2
+    return 999
+
+
 def _align_round_to_next(curr_round: dict, next_round: dict) -> None:
     """Reorder curr_round's matches so the pair feeding a given next-round match
     sit adjacent, in the same left-to-right order as that next-round match — the
@@ -1576,40 +1590,6 @@ def _align_round_to_next(curr_round: dict, next_round: dict) -> None:
     curr_round["matches"] = [x[2] for x in match_scores]
 
 
-# Verified route from the quarterfinals on (cross-checked against multiple
-# independent bracket reports): each pair-of-pairs lists the two quarterfinal
-# matchups that share a semifinal. The free data source doesn't publish which
-# QF feeds which SF, and sorting matches by kickoff date doesn't line them up
-# either — a synthesized cross gets appended after whatever real fixtures the
-# source already had regardless of which semifinal it belongs to, so e.g.
-# España-Bélgica can end up sorted next to Noruega-Inglaterra even though
-# they're headed for different semifinals. Pin the grouping explicitly.
-#
-# Each entry is (semifinal_index, quarterfinal_pair_index) so a synthesized
-# round-of-16 cross also pairs the right two teams (not just the right
-# semifinal quad) when several of a semifinal's teams are pending at once.
-WC_QF_ROUTE = {
-    "morocco": (0, 0), "france": (0, 0),
-    "spain": (0, 1), "belgium": (0, 1),
-    "norway": (1, 0), "england": (1, 0),
-    "argentina": (1, 1), "switzerland": (1, 1),
-}
-
-
-def _wc_qf_route_key(team: str):
-    """(semifinal_index, quarterfinal_pair_index) for a team from WC_QF_ROUTE,
-    or a large sentinel (sorts last, never collides with a real group) for a
-    team the route doesn't know about."""
-    return WC_QF_ROUTE.get(team, (99, 99))
-
-
-def _wc_sf_group(m: dict) -> int:
-    """Which semifinal group (0/1) a quarterfinal match belongs to, from
-    WC_QF_ROUTE; falls back to sorting last for an unrecognised matchup."""
-    home, away = _wc_ko_team(m, "home"), _wc_ko_team(m, "away")
-    return min(_wc_qf_route_key(home)[0], _wc_qf_route_key(away)[0])
-
-
 def _wc_synthesize_next_round(curr_round: dict, next_round: dict) -> None:
     """When two sibling matches in curr_round are both finished but the next
     round doesn't have a real fixture for their winners yet (the data source
@@ -1629,12 +1609,6 @@ def _wc_synthesize_next_round(curr_round: dict, next_round: dict) -> None:
             continue
         if _wc_ko_team(m, m["winner"]) not in next_teams:
             pending.append(m)
-
-    # Group pending winners by their known route (see WC_QF_ROUTE) before
-    # pairing adjacent entries, so e.g. Argentina and Switzerland's winners
-    # pair with each other even if Morocco's and France's winners are also
-    # pending at the same time — plain array order doesn't guarantee that.
-    pending.sort(key=lambda m: _wc_qf_route_key(_wc_ko_team(m, m["winner"])))
 
     for i in range(0, len(pending) - 1, 2):
         if len(next_round["matches"]) >= next_round["slots"]:
@@ -1675,14 +1649,17 @@ def _wc_align_bracket(rounds_data: list) -> list:
     for i in range(len(chain) - 1):
         _wc_synthesize_next_round(chain[i], chain[i + 1])
 
-    # The "qf" round can now hold a mix of real fixtures (sorted by whatever
-    # date the source published) and freshly-appended synthesized crosses
-    # (tacked on at the end) — regroup the whole round by known semifinal so
-    # the two matchups feeding the same semifinal always sit together,
-    # regardless of which were real vs. synthesized or in what order.
-    if "qf" in by_key:
-        by_key["qf"]["matches"].sort(key=lambda m: (
-            _wc_sf_group(m), m.get("date") or "9999", m.get("time") or "99:99",
+    # A round can now hold a mix of real fixtures (sorted by whatever date the
+    # source published) and freshly-appended synthesized crosses (tacked on at
+    # the end) — resort every round, front to back this time, by *where in the
+    # previous round* each match's teams came from. Match i of the previous
+    # round always feeds slot i//2 of this one, so this is what actually keeps
+    # a cuartos card lined up with the two octavos matches that feed it,
+    # regardless of kickoff dates or which entries were synthesized.
+    for i in range(1, len(chain)):
+        prev = chain[i - 1]
+        chain[i]["matches"].sort(key=lambda m: (
+            _wc_feeder_slot(m, prev), m.get("date") or "9999", m.get("time") or "99:99",
         ))
 
     return rounds_data
