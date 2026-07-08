@@ -1590,11 +1590,31 @@ def _align_round_to_next(curr_round: dict, next_round: dict) -> None:
     curr_round["matches"] = [x[2] for x in match_scores]
 
 
+# Quarterfinals FIFA has already confirmed on its official schedule but that
+# the free data source hadn't published yet as of this writing, cross-checked
+# against two independent sources each. Kickoff is converted to Madrid local
+# time (the timezone every other date/time in this file is shown in), which
+# can push the calendar date a day later than the US-market date quoted by
+# most coverage (e.g. Argentina-Suiza is "11 jul, 8pm Kansas City" but that's
+# already past midnight in Madrid). Delete an entry once the source publishes
+# the real fixture — it'll arrive as a normal match and simply supersede this.
+WC_CONFIRMED_UPCOMING = {
+    frozenset({"morocco", "france"}): {
+        "date": "2026-07-09", "time": "22:00", "venue": "Gillette Stadium", "country": "Estados Unidos",
+    },
+    frozenset({"argentina", "switzerland"}): {
+        "date": "2026-07-12", "time": "03:00", "venue": "Arrowhead Stadium", "country": "Estados Unidos",
+    },
+}
+
+
 def _wc_synthesize_next_round(curr_round: dict, next_round: dict) -> None:
     """When two sibling matches in curr_round are both finished but the next
     round doesn't have a real fixture for their winners yet (the data source
     hasn't published that date), add a placeholder card naming the two winners
-    instead of leaving a blank 'Por definir' slot."""
+    instead of leaving a blank 'Por definir' slot. WC_CONFIRMED_UPCOMING fills
+    in the real kickoff for the handful of these FIFA has already confirmed,
+    so that card can be added to the calendar like any other upcoming fixture."""
     if not curr_round["matches"] or next_round.get("slots") is None:
         return
 
@@ -1615,16 +1635,19 @@ def _wc_synthesize_next_round(curr_round: dict, next_round: dict) -> None:
             break
         a, b = pending[i], pending[i + 1]
         wa, wb = a["winner"], b["winner"]
+        confirmed = WC_CONFIRMED_UPCOMING.get(
+            frozenset({_wc_ko_team(a, wa), _wc_ko_team(b, wb)})
+        ) or {}
         next_round["matches"].append({
             "match_id": None,
-            "date": None, "time": None, "timestamp": None,
+            "date": confirmed.get("date"), "time": confirmed.get("time"), "timestamp": None,
             "round": None, "round_name": next_round["name"],
             "home": a[f"{wa}"], "home_en": a[f"{wa}_en"], "home_flag": a[f"{wa}_flag"],
             "home_score": None,
             "away": b[f"{wb}"], "away_en": b[f"{wb}_en"], "away_flag": b[f"{wb}_flag"],
             "away_score": None,
             "status": "upcoming", "postponed": False,
-            "venue": None, "country": None, "channel": None,
+            "venue": confirmed.get("venue"), "country": confirmed.get("country"), "channel": None,
             "source": "synthetic", "winner": None,
         })
 
