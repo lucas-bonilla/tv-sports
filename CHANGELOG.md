@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - **World Cup knockout bracket (cuadro de la fase eliminatoria)** (`/api/wc/bracket`): once the group stage ends, a horizontally scrollable bracket shows the knockout rounds left→right as the tournament narrows (Dieciseisavos → Octavos → Cuartos → Semifinales → Final, plus a trailing Tercer puesto). Each matchup is a condensed card with flags, teams, score, kickoff date/time and a live/final badge; the winner of a finished tie is bolded, and live/finished matches open the same result sheet as the fixtures. Every round always renders at full width ("Por definir" placeholders fill unresolved slots) so the cuadro shows its shape from the moment the groups end. Knockout fixtures are classified by TheSportsDB's team-count round code (32→dieciseisavos, 16→octavos, 8→cuartos, 4→semis, 2→final) gated on the knockout start date — so a group matchday whose number collides with a code is never misfiled — with the official FIFA 2026 date windows as the authoritative in-phase classifier (they also separate the third-place match from the final). The block reuses the merged, persisted match registro (so scores stay live) and unions in later rounds beyond the fixtures window from the registro. Hidden until there's knockout data
 - **Unidad Editorial as a World Cup fixture/result fallback when TheSportsDB rate-limits**: TheSportsDB's free tier 429s easily, which could leave a day (and the bracket) empty. Each day TheSportsDB fails to serve is now backfilled from Unidad Editorial's per-day events feed (`api.unidadeditorial.es/sports/v1/events/preset/…`, the source behind Marca's results page) — complete and unthrottled, with English team names mapped to TheSportsDB's spelling so it merges seamlessly by team pair + date. Best-effort and targeted (only the failed days), so a healthy fetch adds no extra requests; not-started matches don't surface a phantom 0-0, and a finished match's TheSportsDB id is recovered later so its detail sheet still opens
 - **Live auto-refresh for the World Cup section**: the fixtures and cuadro now refresh themselves every 60s (visibility-aware — paused while the tab is backgrounded, and refreshed immediately on returning) so results settle as matches finish, without a manual refresh and without a spinner flash over the current view
@@ -59,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.2.0] - 2026-03-12
 
 ### Added
+
 - Date filter bar to navigate between days; "Todos" view groups events by day
 - Collapsible sport groups with chevron toggle
 - Quick-nav FAB: navigates by day in multi-day view, by sport in single-day view
@@ -66,6 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Service worker cache auto-invalidation (replaces manual version bumps)
 
 ### Fixed
+
 - Wrong date parsing: marca.com day-name label had no space before the day number
 - Today's events were showing the full week instead of just today (daylist-first HTML parsing)
 - Duplicate events caused by the full-week dump block being parsed alongside per-day blocks
@@ -74,12 +77,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.1.0] - 2026-03-10
 
 ### Added
+
 - Drag-to-reorder sport filter chips on both desktop (mouse) and mobile (touch)
 - Filter chip order persisted to localStorage across sessions
 
 ## [1.0.0] - 2026-03-10
 
 ### Added
+
 - Initial Vercel deployment
 - FastAPI backend scraping sport events from marca.com
 - Vanilla JS/CSS/HTML progressive web app (PWA)
