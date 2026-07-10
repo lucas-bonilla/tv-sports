@@ -927,6 +927,67 @@ def _wc_marca_results() -> list:
     return out
 
 
+def _wc_marca_upcoming() -> list:
+    """Scrape Marca's World Cup calendar for *scheduled* (not-yet-played) fixtures.
+
+    Companion to _wc_marca_results: same page, same per-jornada tables, but reads
+    the rows that show a fecha/hora instead of a score. This is how Marca
+    publishes a knockout pairing before TheSportsDB's free tier does, and — more
+    importantly — it's the only place a penalty-shootout winner surfaces at all:
+    TheSportsDB never exposes penalty scores, so a knockout draw (e.g. Suiza 0-0
+    Colombia) stays without a `winner` in our own data forever even though the
+    match is finished. Marca's next-round pairing implicitly reveals who
+    advanced, which _wc_synthesize_next_round uses to unblock that case. Cached
+    on its own TTL and fully best-effort — any failure returns the last good
+    copy (or []), so it can never sink the primary fetch.
+    """
+    now = time.time()
+    cache = _wc_marca_upcoming_cache
+    if cache["data"] is not None and (now - cache["ts"]) < WC_MATCHES_TTL:
+        return cache["data"]
+
+    try:
+        resp = requests.get(MARCA_WC_CALENDAR_URL, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+    except Exception as e:
+        logger.warning(f"Marca World Cup calendar fetch failed: {e}")
+        return cache["data"] or []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    out: list = []
+    year = datetime.now(MADRID_TZ).year
+    for table in soup.select("table.jor.agendas"):
+        rnd = _wc_int((table.get("id") or "").lower().replace("jornada", ""))
+        for tr in table.select("tbody tr"):
+            fecha_el = tr.select_one("td.resultado .fecha")
+            if not fecha_el:
+                continue  # played row: shows a score instead of fecha/hora
+            hora_el = tr.select_one("td.resultado .hora")
+            local = tr.select_one("td.local img")
+            visit = tr.select_one("td.visitante img")
+            home_en = WC_ES_EN.get(_strip_accents((local.get("alt") if local else "") or ""))
+            away_en = WC_ES_EN.get(_strip_accents((visit.get("alt") if visit else "") or ""))
+            if not (home_en and away_en):
+                continue  # a team we don't map; skip rather than guess
+            date_iso = None
+            try:
+                day, month = fecha_el.get_text(strip=True).split("/")
+                date_iso = f"{year}-{int(month):02d}-{int(day):02d}"
+            except ValueError:
+                pass
+            out.append({
+                "home_en": home_en,
+                "away_en": away_en,
+                "round": rnd,
+                "date": date_iso,
+                "time": hora_el.get_text(strip=True) if hora_el else None,
+            })
+
+    cache["data"] = out
+    cache["ts"] = now
+    return out
+
+
 def _wc_kickoff_passed(m: dict) -> bool:
     """True when a fixture's Madrid kickoff is in the past — i.e. it should carry
     a result by now. Used to decide a missing-score match is worth backfilling."""
@@ -941,15 +1002,22 @@ def _wc_kickoff_passed(m: dict) -> bool:
 
 
 def _wc_backfill_scores(fresh: dict) -> None:
-    """Fill scores TheSportsDB didn't provide from Marca's calendar (in place).
+    """Fill scores/status TheSportsDB didn't provide from Marca's calendar (in place).
 
     Stays a genuine fallback: Marca's results page is only fetched when at least
-    one already-kicked-off match is still missing a score, so the steady state
-    (TheSportsDB healthy) adds no extra request. Backfilled scores flow into the
-    persisted registro like any other, so they survive once written.
+    one already-kicked-off match is still missing a score or stuck in a
+    non-finished status, so the steady state (TheSportsDB healthy) adds no extra
+    request. This also covers the case where TheSportsDB has a score but is slow
+    to flip strStatus to "FT" (a known free-tier lag) — a fixture with a kickoff
+    in the past that Marca lists as played is corrected to "finished" even if it
+    already had a score, since a stale status here is what blocks knockout-round
+    winner resolution (_wc_apply_winner) and, transitively, the synthesized
+    next-round fixture (_wc_synthesize_next_round). Backfilled scores/status flow
+    into the persisted registro like any other, so they survive once written.
     """
     pending = [m for ms in fresh.values() for m in ms
-               if m.get("home_score") is None and _wc_kickoff_passed(m)]
+               if _wc_kickoff_passed(m)
+               and (m.get("home_score") is None or m.get("status") != "finished")]
     if not pending:
         return
 
@@ -1608,15 +1676,50 @@ WC_CONFIRMED_UPCOMING = {
 }
 
 
+def _wc_backfill_winner_from_marca(curr_round: dict) -> None:
+    """Resolve a knockout draw's winner from Marca's next-round pairing.
+
+    TheSportsDB never exposes a penalty-shootout score, so a finished knockout
+    match that ended level (e.g. Suiza 0-0 Colombia) keeps `winner: None`
+    forever in our own data — which in turn blocks _wc_synthesize_next_round
+    from ever pairing that slot. Marca's calendar implicitly answers this: it
+    lists the advancing team's *next* fixture, so whichever of the two teams
+    turns up opposite a team other than its own curr-round opponent is the
+    winner. (The opponent must be *some other* team, not necessarily one from
+    outside this round — the sibling match's own winner is a valid opponent,
+    which is exactly the case a two-way penalty-shootout draw feeds into.)
+    """
+    for m in curr_round["matches"]:
+        if m.get("status") != "finished" or m.get("winner") in ("home", "away"):
+            continue
+        home_t, away_t = _wc_ko_team(m, "home"), _wc_ko_team(m, "away")
+        for r in _wc_marca_upcoming():
+            r_home = (r["home_en"] or "").strip().lower()
+            r_away = (r["away_en"] or "").strip().lower()
+            if home_t in (r_home, r_away):
+                opponent = r_away if r_home == home_t else r_home
+                if opponent != away_t:
+                    m["winner"] = "home"
+                    break
+            elif away_t in (r_home, r_away):
+                opponent = r_away if r_home == away_t else r_home
+                if opponent != home_t:
+                    m["winner"] = "away"
+                    break
+
+
 def _wc_synthesize_next_round(curr_round: dict, next_round: dict) -> None:
     """When two sibling matches in curr_round are both finished but the next
     round doesn't have a real fixture for their winners yet (the data source
     hasn't published that date), add a placeholder card naming the two winners
-    instead of leaving a blank 'Por definir' slot. WC_CONFIRMED_UPCOMING fills
-    in the real kickoff for the handful of these FIFA has already confirmed,
-    so that card can be added to the calendar like any other upcoming fixture."""
+    instead of leaving a blank 'Por definir' slot. Marca's own calendar (already
+    fetched as part of score backfill) is checked first for the real kickoff of
+    that pairing; WC_CONFIRMED_UPCOMING is a static fallback for the handful of
+    these FIFA has confirmed that neither live source has published yet."""
     if not curr_round["matches"] or next_round.get("slots") is None:
         return
+
+    _wc_backfill_winner_from_marca(curr_round)
 
     next_teams = set()
     for nm in next_round["matches"]:
@@ -1630,17 +1733,24 @@ def _wc_synthesize_next_round(curr_round: dict, next_round: dict) -> None:
         if _wc_ko_team(m, m["winner"]) not in next_teams:
             pending.append(m)
 
+    marca_upcoming = _wc_marca_upcoming()
     for i in range(0, len(pending) - 1, 2):
         if len(next_round["matches"]) >= next_round["slots"]:
             break
         a, b = pending[i], pending[i + 1]
         wa, wb = a["winner"], b["winner"]
-        confirmed = WC_CONFIRMED_UPCOMING.get(
-            frozenset({_wc_ko_team(a, wa), _wc_ko_team(b, wb)})
-        ) or {}
+        pair_key = frozenset({_wc_ko_team(a, wa), _wc_ko_team(b, wb)})
+        marca_fixture = next(
+            (r for r in marca_upcoming
+             if {(r["home_en"] or "").strip().lower(), (r["away_en"] or "").strip().lower()} == pair_key),
+            None,
+        )
+        confirmed = WC_CONFIRMED_UPCOMING.get(pair_key) or {}
+        date = (marca_fixture or {}).get("date") or confirmed.get("date")
+        time_ = (marca_fixture or {}).get("time") or confirmed.get("time")
         next_round["matches"].append({
             "match_id": None,
-            "date": confirmed.get("date"), "time": confirmed.get("time"), "timestamp": None,
+            "date": date, "time": time_, "timestamp": None,
             "round": None, "round_name": next_round["name"],
             "home": a[f"{wa}"], "home_en": a[f"{wa}_en"], "home_flag": a[f"{wa}_flag"],
             "home_score": None,
@@ -1964,6 +2074,8 @@ _wc_standings_cache: dict = {"data": None, "ts": 0.0}
 _wc_bracket_cache: dict = {"data": None, "ts": 0.0}
 # Marca calendar results — the score backup, fetched only on demand.
 _wc_marca_results_cache: dict = {"data": None, "ts": 0.0}
+# Marca calendar pending fixtures — the next-round-pairing backup, ditto.
+_wc_marca_upcoming_cache: dict = {"data": None, "ts": 0.0}
 _wc_lock = asyncio.Lock()
 WC_MATCHES_TTL = 300  # 5 minutes — live scores move fast
 WC_STANDINGS_TTL = 900  # 15 minutes — tables update less often
