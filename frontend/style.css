@@ -980,8 +980,9 @@ main {
   gap: 0.18rem;
   font-size: 0.78rem;
 }
-.wc-br-match[data-wc-detail] { cursor: pointer; }
-.wc-br-match[data-wc-detail]:hover { background: rgba(88, 166, 255, 0.06); }
+.wc-br-match[data-wc-event], .wc-br-match[data-wc-detail] { cursor: pointer; }
+.wc-br-match[data-wc-event]:hover, .wc-br-match[data-wc-detail]:hover { background: rgba(88, 166, 255, 0.06); }
+.wc-br-match[data-wc-event]:focus-visible,
 .wc-br-match[data-wc-detail]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .wc-br-match--live { border-color: #f85149; box-shadow: 0 0 0 1px rgba(248, 81, 73, 0.4); }
 .wc-br-match--done {
