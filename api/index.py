@@ -1675,6 +1675,27 @@ WC_CONFIRMED_UPCOMING = {
     },
 }
 
+# Which half of the bracket each Cuartos pairing sits in (0 = top, feeds the
+# first Semifinal; 1 = bottom, feeds the second). The feeder-slot chain that
+# orders every other round (_wc_align_bracket's final sort) only works because
+# each round's order is inherited from the previous one — but it has nothing
+# to anchor Cuartos to the *official* bracket half, since that depends on the
+# original Dieciseisavos draw, not on whatever order the data source happens
+# to return Octavos in. Hardcoded from the confirmed FIFA bracket so the
+# Semifinal crosses come out right (Francia vs Espana/Belgica winner,
+# Argentina/Suiza winner vs Noruega/Inglaterra winner) instead of whatever the
+# upstream ordering accidentally produces.
+WC_QF_BRACKET_HALF = {
+    frozenset({"morocco", "france"}): 0,
+    frozenset({"spain", "belgium"}): 0,
+    frozenset({"norway", "england"}): 1,
+    frozenset({"argentina", "switzerland"}): 1,
+}
+
+
+def _wc_qf_half(m: dict) -> int | None:
+    return WC_QF_BRACKET_HALF.get(frozenset({_wc_ko_team(m, "home"), _wc_ko_team(m, "away")}))
+
 
 def _wc_backfill_winner_from_marca(curr_round: dict) -> None:
     """Resolve a knockout draw's winner from Marca's next-round pairing.
@@ -1791,9 +1812,19 @@ def _wc_align_bracket(rounds_data: list) -> list:
     # regardless of kickoff dates or which entries were synthesized.
     for i in range(1, len(chain)):
         prev = chain[i - 1]
-        chain[i]["matches"].sort(key=lambda m: (
-            _wc_feeder_slot(m, prev), m.get("date") or "9999", m.get("time") or "99:99",
-        ))
+        round_key = chain[i]["key"]
+        if round_key == "qf":
+            # Feeder-slot ordering isn't trustworthy here (see WC_QF_BRACKET_HALF);
+            # use the confirmed bracket half instead, falling back to feeder-slot
+            # for any pairing not yet in the static map (e.g. a future tournament).
+            chain[i]["matches"].sort(key=lambda m: (
+                _wc_qf_half(m) if _wc_qf_half(m) is not None else _wc_feeder_slot(m, prev),
+                m.get("date") or "9999", m.get("time") or "99:99",
+            ))
+        else:
+            chain[i]["matches"].sort(key=lambda m: (
+                _wc_feeder_slot(m, prev), m.get("date") or "9999", m.get("time") or "99:99",
+            ))
 
     return rounds_data
 
@@ -1848,6 +1879,24 @@ def get_wc_bracket() -> dict:
         })
     
     # Align matches across rounds so teams advancing from one round appear near their next match
+    rounds = _wc_align_bracket(rounds)
+
+    # _wc_align_bracket's synthesize step can create placeholder matches (e.g. a
+    # Cuartos cross whose real fixture hasn't been published yet) with
+    # match_id: None — those never went through the score/winner backfill that
+    # ran on the *real* fetched matches above, so a placeholder whose kickoff
+    # has since passed would stay stuck as "upcoming" forever even once it's
+    # actually been played. Backfill them too, then re-run alignment so a
+    # freshly-resolved winner can cascade into the next round's synthesis
+    # (idempotent: _wc_synthesize_next_round skips pairings already present).
+    by_round_matches = {r["key"]: r["matches"] for r in rounds}
+    _wc_backfill_scores(by_round_matches)
+    for r in rounds:
+        for m in r["matches"]:
+            if m.get("winner") not in ("home", "away"):
+                _wc_apply_winner(m)
+            if m.get("status") == "live":
+                live = True
     rounds = _wc_align_bracket(rounds)
 
     return {
