@@ -1709,12 +1709,32 @@ def _wc_backfill_winner_from_marca(curr_round: dict) -> None:
     winner. (The opponent must be *some other* team, not necessarily one from
     outside this round — the sibling match's own winner is a valid opponent,
     which is exactly the case a two-way penalty-shootout draw feeds into.)
+
+    Checks both the *upcoming* pairing (next match not yet played) and, once
+    that next match has itself finished (e.g. by the time this runs the
+    following day), the *result* of that pairing — a group-stage rematch could
+    otherwise be mistaken for advancement evidence, so a result is only
+    trusted when it falls on the jornada right after this match's own.
     """
+    results = _wc_marca_results()
+    upcoming = _wc_marca_upcoming()
     for m in curr_round["matches"]:
         if m.get("status") != "finished" or m.get("winner") in ("home", "away"):
             continue
         home_t, away_t = _wc_ko_team(m, "home"), _wc_ko_team(m, "away")
-        for r in _wc_marca_upcoming():
+        own_pair = frozenset({home_t, away_t})
+        own_rnd = next(
+            (r["round"] for r in results
+             if frozenset({(r["home_en"] or "").strip().lower(), (r["away_en"] or "").strip().lower()}) == own_pair),
+            None,
+        )
+        next_rnd = own_rnd + 1 if own_rnd is not None else None
+
+        candidates = upcoming if next_rnd is None else [
+            r for r in results if r.get("round") == next_rnd
+        ] + upcoming
+
+        for r in candidates:
             r_home = (r["home_en"] or "").strip().lower()
             r_away = (r["away_en"] or "").strip().lower()
             if home_t in (r_home, r_away):
@@ -1736,7 +1756,14 @@ def _wc_synthesize_next_round(curr_round: dict, next_round: dict) -> None:
     instead of leaving a blank 'Por definir' slot. Marca's own calendar (already
     fetched as part of score backfill) is checked first for the real kickoff of
     that pairing; WC_CONFIRMED_UPCOMING is a static fallback for the handful of
-    these FIFA has confirmed that neither live source has published yet."""
+    these FIFA has confirmed that neither live source has published yet.
+
+    If that next-round match has *already been played* (TheSportsDB can drop a
+    finished fixture entirely rather than just lag its score — the free tier
+    gap _wc_backfill_scores otherwise papers over — Marca's calendar is the
+    only place the result survives), the synthesized card carries the real
+    score and status instead of sitting as a blank 'upcoming' placeholder.
+    """
     if not curr_round["matches"] or next_round.get("slots") is None:
         return
 
@@ -1755,6 +1782,7 @@ def _wc_synthesize_next_round(curr_round: dict, next_round: dict) -> None:
             pending.append(m)
 
     marca_upcoming = _wc_marca_upcoming()
+    marca_results = _wc_marca_results()
     for i in range(0, len(pending) - 1, 2):
         if len(next_round["matches"]) >= next_round["slots"]:
             break
@@ -1766,20 +1794,39 @@ def _wc_synthesize_next_round(curr_round: dict, next_round: dict) -> None:
              if {(r["home_en"] or "").strip().lower(), (r["away_en"] or "").strip().lower()} == pair_key),
             None,
         )
+        marca_result = next(
+            (r for r in marca_results
+             if {(r["home_en"] or "").strip().lower(), (r["away_en"] or "").strip().lower()} == pair_key),
+            None,
+        )
         confirmed = WC_CONFIRMED_UPCOMING.get(pair_key) or {}
         date = (marca_fixture or {}).get("date") or confirmed.get("date")
         time_ = (marca_fixture or {}).get("time") or confirmed.get("time")
+        home_score, away_score, status, winner, source = None, None, "upcoming", None, "synthetic"
+        if marca_result:
+            a_winner_en = (a[f"{wa}_en"] or "").strip().lower()
+            r_home_en = (marca_result["home_en"] or "").strip().lower()
+            if r_home_en == a_winner_en:
+                home_score, away_score = marca_result["home_score"], marca_result["away_score"]
+            else:
+                home_score, away_score = marca_result["away_score"], marca_result["home_score"]
+            status = "finished"
+            if home_score > away_score:
+                winner = "home"
+            elif away_score > home_score:
+                winner = "away"
+            source = "synthetic+marca_result"
         next_round["matches"].append({
             "match_id": None,
             "date": date, "time": time_, "timestamp": None,
             "round": None, "round_name": next_round["name"],
             "home": a[f"{wa}"], "home_en": a[f"{wa}_en"], "home_flag": a[f"{wa}_flag"],
-            "home_score": None,
+            "home_score": home_score,
             "away": b[f"{wb}"], "away_en": b[f"{wb}_en"], "away_flag": b[f"{wb}_flag"],
-            "away_score": None,
-            "status": "upcoming", "postponed": False,
+            "away_score": away_score,
+            "status": status, "postponed": False,
             "venue": confirmed.get("venue"), "country": confirmed.get("country"), "channel": None,
-            "source": "synthetic", "winner": None,
+            "source": source, "winner": winner,
         })
 
 
