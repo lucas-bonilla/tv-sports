@@ -1938,6 +1938,7 @@ def get_wc_bracket() -> dict:
     # (idempotent: _wc_synthesize_next_round skips pairings already present).
     by_round_matches = {r["key"]: r["matches"] for r in rounds}
     _wc_backfill_scores(by_round_matches)
+    _wc_backfill_event_ids(by_round_matches)
     for r in rounds:
         for m in r["matches"]:
             if m.get("winner") not in ("home", "away"):
