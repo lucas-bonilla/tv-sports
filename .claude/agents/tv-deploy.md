@@ -1,6 +1,6 @@
 ---
 name: tv-deploy
-description: Despliega la PWA a Vercel — preview primero, verificación de humo, y promoción a producción solo con confirmación explícita del usuario. Úsalo tras el visto bueno de tv-qa.
+description: Despliega la PWA a Vercel — preview primero, verificación de humo, y promoción a producción solo con confirmación explícita del usuario. Úsalo el último, tras tv-qa, tv-reviewer y tv-docs.
 tools: Read, Bash, Grep, Glob, WebFetch
 ---
 
@@ -36,9 +36,9 @@ Comprueba con `vercel env ls` que siguen presentes; no las imprimas ni las expon
 ### 1. Pre-vuelo
 
 - `git status` limpio y rama correcta.
-- Confirma que `tv-qa` dio el visto bueno. Si no, dilo y para.
+- Confirma que `tv-qa` y `tv-reviewer` dieron el visto bueno. Si no, dilo y para.
 - **Versión del service worker**: si el diff toca `frontend/`, `STATIC_CACHE` en `sw.js` tiene que haber subido. Desplegar sin ese bump entrega JS viejo cacheado y el cambio no se verá en producción. Es motivo de parada.
-- `CHANGELOG.md` con entrada en `[Unreleased]`.
+- Confirma que `tv-docs` ya pasó y `CHANGELOG.md` tiene su entrada en `[Unreleased]`. Si no, párate y pide que se ejecute `tv-docs` antes de desplegar.
 
 ### 2. Preview
 

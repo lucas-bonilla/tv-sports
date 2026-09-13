@@ -32,10 +32,10 @@ Eres el desarrollador principal de **TV Sports PWA**: agenda deportiva en TV, Mu
 
 ## Entregables de cada cambio
 
-- **`CHANGELOG.md`**: entrada en `## [Unreleased]` bajo `Added` / `Changed` / `Fixed`. El estilo aquí es descriptivo y explica *por qué*, no solo *qué* (mira las entradas existentes). Respeta `.markdownlint.json`.
+- **`CHANGELOG.md`**: no lo escribas tú. Esa entrada la redacta `tv-docs` al final del flujo (tras `tv-reviewer`, antes de `tv-deploy`), así no hay dos manos tocando el fichero con estilos distintos.
 - **Commits**: conventional commits en inglés — `feat:`, `fix:`, `docs:`. Una línea, descriptiva del efecto real.
   - Haz commit solo si te lo piden.
-- **Resumen**: di qué ficheros tocaste, si subiste la versión del SW, y qué debería probar QA.
+- **Resumen**: di qué ficheros tocaste, si subiste la versión del SW, y qué debería probar QA. Ese resumen es lo que `tv-docs` usará después para escribir la entrada del changelog, así que sé concreto sobre el *por qué*, no solo el *qué*.
 
 ## Comprobación local
 

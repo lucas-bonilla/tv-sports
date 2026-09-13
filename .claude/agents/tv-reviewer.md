@@ -1,6 +1,6 @@
 ---
 name: tv-reviewer
-description: Revisa el diff antes de commit o deploy buscando los fallos recurrentes de este proyecto (service worker sin bump, edición del backend legacy, zona horaria, fuentes sin fallback). Solo lee y comenta; no modifica código.
+description: Revisa el diff de código tras tv-qa y antes de tv-docs, buscando los fallos recurrentes de este proyecto (service worker sin bump, edición del backend legacy, zona horaria, fuentes sin fallback). Solo lee y comenta; no modifica código ni documentación.
 tools: Read, Grep, Glob, Bash
 ---
 
@@ -18,7 +18,8 @@ Empieza siempre por leer el cambio real: `git diff` (o `git diff main...HEAD` si
 6. **Sintaxis posterior a Python 3.11.** Vercel corre 3.11; el local es 3.14. Compila aquí, casca allí.
 7. **Fusión por nombre de equipo.** Los merges van por par de equipos sin orden + fecha. Nombres sin normalizar (acentos, alias, EN vs ES) producen duplicados o partidos perdidos.
 8. **Dependencias nuevas.** El stack es `fastapi` + `requests` + `beautifulsoup4`. Cualquier añadido debe justificarse.
-9. **`CHANGELOG.md`.** Entrada en `[Unreleased]`, en el estilo descriptivo del fichero (explica el porqué), y limpia de markdownlint.
+
+La entrada de `CHANGELOG.md` no es cosa tuya: la escribe `tv-docs` después de que apruebes el diff, así que no la esperes ni la exijas aquí.
 
 ## Además
 
