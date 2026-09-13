@@ -15,21 +15,16 @@ Tampoco toques variables de entorno, dominios ni ajustes del proyecto sin pedirl
 ## Contexto
 
 - Proyecto Vercel: `vercel.json` reescribe `/api/(.*)` → `/api/index.py` (función Python) y sirve `frontend/` como estático.
-- Runtime Python **3.11** (`backend/runtime.txt`). Local hay 3.14 — sintaxis más nueva compila local y **falla en Vercel**.
+- Runtime Python **3.11** (`backend/runtime.txt`). Sintaxis más nueva puede compilar en local y **fallar en Vercel**.
 - Dependencias: `requirements.txt` en la raíz (`fastapi`, `requests`, `beautifulsoup4`).
-- CLI `vercel` instalado. **Este worktree no está enlazado** (no hay `.vercel/`), y `.vercel` está en `.gitignore`. La primera vez hará falta `vercel link` — pide al usuario que lo ejecute él si requiere login interactivo (`! vercel login`).
+- CLI `vercel` instalado. **Los worktrees no están enlazados** (no hay `.vercel/`, y está en `.gitignore`). La primera vez hará falta `vercel link` — pide al usuario que lo ejecute él si requiere login interactivo (`! vercel login`).
 - No hay CI: el despliegue es manual desde local.
 
 ### Variables de entorno en producción
 
-Opcionales, con degradación elegante, pero su ausencia cambia el comportamiento:
+`KV_REST_API_URL` / `KV_REST_API_TOKEN` (Upstash Redis) son las únicas que el código aún lee, y **hoy sin consumidores**: los helpers `kv_*` quedaron sin uso al eliminar el Mundial. Están pendientes de retirar junto con la integración de Upstash en Vercel, que sigue facturando sin servir a nada — menciónalo si el usuario no lo ha hecho.
 
-`KV_REST_API_URL` / `KV_REST_API_TOKEN` (Upstash Redis: caché compartida e histórico),
-`THESPORTSDB_KEY` (por defecto `3`, tier gratuito que da 429),
-`API_FOOTBALL_KEY` / `API_FOOTBALL_HOST` (goles y tarjetas completos),
-`WC_SEASON`, `WC_SEASON_START`, `WC_DAYS_AHEAD`, `WC_STANDINGS_SEASON`.
-
-Comprueba con `vercel env ls` que siguen presentes; no las imprimas ni las expongas.
+Si `vercel env ls` muestra `THESPORTSDB_KEY`, `API_FOOTBALL_KEY`, `API_FOOTBALL_HOST` o cualquier `WC_*`, son restos inertes del Mundial: ya no las lee nadie y pueden eliminarse. No imprimas ni expongas valores de variables.
 
 ## Procedimiento
 
@@ -37,7 +32,7 @@ Comprueba con `vercel env ls` que siguen presentes; no las imprimas ni las expon
 
 - `git status` limpio y rama correcta.
 - Confirma que `tv-qa` y `tv-reviewer` dieron el visto bueno. Si no, dilo y para.
-- **Versión del service worker**: si el diff toca `frontend/`, `STATIC_CACHE` en `sw.js` tiene que haber subido. Desplegar sin ese bump entrega JS viejo cacheado y el cambio no se verá en producción. Es motivo de parada.
+- **Versión del service worker**: si el diff toca `frontend/`, `STATIC_CACHE` en `sw.js` tiene que haber subido, y cada entrada del array `STATIC` debe existir. Desplegar sin ese bump entrega JS viejo cacheado y el cambio no se verá; desplegar con una entrada fantasma congela a los usuarios en la versión vieja. Motivo de parada en ambos casos.
 - Confirma que `tv-docs` ya pasó y `CHANGELOG.md` tiene su entrada en `[Unreleased]`. Si no, párate y pide que se ejecute `tv-docs` antes de desplegar.
 
 ### 2. Preview
@@ -49,9 +44,9 @@ vercel        # despliegue de preview, devuelve una URL
 Sobre la URL de preview, humo obligatorio:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code} " <url>/api/health
-# y repite con: /api/events /api/wc/matches /api/wc/bracket /api/wc/standings
-#               /api/padel/tournaments /api/ics
+for p in /api/health /api/events /api/ics /api/padel/tournaments; do
+  curl -s -o /dev/null -w "$p %{http_code}\n" <url>$p
+done
 ```
 
 Verifica también: `/api/ics` devuelve `text/calendar`; los endpoints devuelven datos y no `[]`; la home carga el frontend; y `sw.js` servido en preview tiene la versión nueva.
