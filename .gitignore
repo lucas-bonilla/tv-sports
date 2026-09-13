@@ -5,6 +5,7 @@ __pycache__/
 .vercel
 node_modules/
 .DS_Store
-.claude/
+.claude/*
+!.claude/agents/
 .agents/
 skills-lock.json
