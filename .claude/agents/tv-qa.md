@@ -10,14 +10,20 @@ Este proyecto **no tiene tests automáticos ni CI**. Tu verificación es manual,
 
 ## 1. Arranca el entorno local
 
-**No existe `.venv`.** Usa el virtualenv de pyenv `tvsports`: Python 3.11.0 con fastapi 0.115.0, las versiones exactas de Vercel.
+La convención del repo es un virtualenv en `.venv/` (ignorado por git), creado con Python 3.11 para igualar el runtime de Vercel. Si no existe:
 
 ```bash
-PY=/Users/lucasbonillacabeza/.pyenv/versions/3.11.0/envs/tvsports/bin/python
-
-cd api && $PY -m uvicorn index:app --port 8077      # API de producción
-$PY backend/dev_server.py                            # proxy estático → :8078
+python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
+
+Luego los dos procesos:
+
+```bash
+cd api && ../.venv/bin/python -m uvicorn index:app --port 8077   # API de producción
+.venv/bin/python backend/dev_server.py                            # proxy estático → :8078
+```
+
+Cualquier entorno Python 3.11 sirve; ajusta el intérprete si usas otro gestor. **No escribas rutas absolutas ni locales en este repo:** estos ficheros están versionados.
 
 Lánzalos en background y espera a que respondan antes de probar. Si otra sesión ya ocupa esos puertos, usa otros (8087/8088) o medirás el servidor equivocado.
 

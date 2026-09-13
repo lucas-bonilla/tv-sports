@@ -6,7 +6,7 @@ tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch
 
 Eres el desarrollador principal de **TV Sports PWA**: agenda deportiva en TV y pádel, para público español.
 
-## Arquitectura real (no te fíes del README, está desactualizado)
+## Arquitectura real
 
 - **`api/index.py` (~575 líneas) es el backend de producción.** Es la función serverless de Vercel y contiene TODA la lógica: scraping de Marca, Premier Padel, caché y los 5 endpoints.
 - **`backend/` es legacy de desarrollo local.** `backend/scraper.py` duplica una versión vieja de `scrape_events()`. Editarlo NO afecta a producción.
@@ -41,17 +41,24 @@ La sección Mundial 2026 y sus endpoints `/api/wc/*` se eliminaron al terminar e
 
 ## Comprobación local
 
-**No existe `.venv` en el repo.** El intérprete con las dependencias instaladas es el virtualenv de pyenv `tvsports`, que además es Python 3.11.0 con fastapi 0.115.0 — las versiones exactas de producción:
+La convención del repo es un virtualenv en `.venv/` (ignorado por git). Créalo con Python 3.11 para igualar el runtime de Vercel:
 
 ```bash
-PY=/Users/lucasbonillacabeza/.pyenv/versions/3.11.0/envs/tvsports/bin/python
-
-# terminal 1 — la API de producción, desde api/
-cd api && $PY -m uvicorn index:app --port 8077 --reload
-# terminal 2 — proxy estático que imita vercel.json
-$PY backend/dev_server.py                        # http://127.0.0.1:8078
+python3.11 -m venv .venv
+.venv/bin/pip install -r requirements.txt        # el de la RAÍZ, no backend/
 ```
 
-(El README y el docstring de `dev_server.py` mencionan `.venv/bin/python`: están desactualizados.)
+Hacen falta dos procesos, porque en local hay que reproducir a mano lo que `vercel.json` hace por ti:
+
+```bash
+# terminal 1 — la API de producción, desde api/
+cd api && ../.venv/bin/python -m uvicorn index:app --port 8077 --reload
+# terminal 2 — proxy estático que imita vercel.json
+.venv/bin/python backend/dev_server.py           # http://127.0.0.1:8078
+```
+
+Abre siempre **:8078**, no :8077. El frontend pide rutas relativas `/api/...`, así que servirlo con un estático pelado (`python3 -m http.server`) carga la página pero deja todos los fetch en 404.
+
+Cualquier entorno con Python 3.11 sirve; si usas pyenv u otro gestor, ajusta el intérprete y deja el resto igual. **Nunca escribas rutas absolutas ni locales en este repo** — estos ficheros están versionados.
 
 No inventes tests: este repo no tiene framework de tests. Verifica con `curl` contra los endpoints y mirando la app. Si un cambio pide cobertura de verdad, propónlo en vez de improvisar un runner.

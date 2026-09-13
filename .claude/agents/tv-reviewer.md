@@ -15,7 +15,7 @@ Empieza siempre por leer el cambio real: `git diff` (o `git diff main...HEAD` si
 3. **Zona horaria.** Horas de cara al usuario en `Europe/Madrid`, convertidas desde UTC, **recalculando el día** (un partido de madrugada se archiva en la fecha equivocada si solo se convierte la hora).
 4. **Acceso de red sin red de seguridad.** Toda llamada externa necesita `timeout`, manejo de excepciones y un fallback. Marca es scraping de HTML y puede cambiar de maquetación de un día para otro; Premier Padel cambia de esquema sin avisar. Una excepción sin capturar deja la página en blanco.
 5. **Dependencia dura de Redis.** Todo debe funcionar con `kv_enabled() == False`.
-6. **Sintaxis posterior a Python 3.11.** Vercel corre 3.11; el `python3` del sistema aquí es 3.14. Compila aquí, casca allí. El virtualenv de pyenv `tvsports` es 3.11.0 y sí reproduce producción.
+6. **Sintaxis posterior a Python 3.11.** Vercel corre 3.11 (`backend/runtime.txt`), pero el `python3` del sistema suele ser más nuevo: compila en local y casca en el despliegue. Lo único que reproduce producción es un entorno 3.11.
 7. **Parseo de fechas que falla en silencio.** `_padel_parse_utc` alimenta el fallback de estados. Si devuelve `None` de más, todos los torneos colapsan a `"upcoming"` sin lanzar excepción: el endpoint sigue dando 200 y nadie se entera.
 8. **Dependencias nuevas.** El stack es `fastapi` + `requests` + `beautifulsoup4`. Cualquier añadido debe justificarse.
 
