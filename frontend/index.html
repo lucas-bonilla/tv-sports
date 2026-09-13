@@ -11,7 +11,7 @@
 </head>
 <body>
   <!-- Full-page loader: hides the staggered per-section loading so the page is
-       revealed once the World Cup, TV schedule and padel data are all ready. -->
+       revealed once the TV schedule and padel data are both ready. -->
   <div id="page-loader" class="page-loader">
     <div class="spinner"></div>
   </div>
@@ -29,40 +29,6 @@
       <div id="filter-bar" class="filter-bar"></div>
     </div>
   </div>
-
-  <!-- ===== World Cup section ===== -->
-  <section id="sec-wc" class="page-section">
-    <div class="section-head">
-      <h2 class="section-title section-title--lg">🏆 Mundial 2026</h2>
-      <span id="wc-live-tag" class="section-live-tag" hidden></span>
-    </div>
-
-    <main id="wc-container">
-      <div class="spinner"></div>
-    </main>
-
-    <!-- Group standings, collapsed by default -->
-    <div id="wc-standings-block" class="padel-calendar-block" hidden>
-      <button id="wc-standings-toggle" class="padel-calendar-toggle" aria-expanded="false">
-        <span>📊 Clasificación por grupos</span>
-        <span class="chevron">›</span>
-      </button>
-      <div id="wc-standings-body" class="padel-calendar-body" hidden></div>
-    </div>
-
-    <!-- Knockout bracket (fase eliminatoria), collapsed by default -->
-    <div id="wc-bracket-block" class="padel-calendar-block" hidden>
-      <button id="wc-bracket-toggle" class="padel-calendar-toggle" aria-expanded="false">
-        <span>🏆 Fase eliminatoria <span id="wc-bracket-live-tag" class="section-live-tag" hidden></span></span>
-        <span class="chevron">›</span>
-      </button>
-      <div id="wc-bracket-body" class="padel-calendar-body" hidden>
-        <div id="wc-bracket-scroll" class="wc-bracket-scroll"></div>
-      </div>
-    </div>
-
-    <div id="wc-updated" class="last-updated"></div>
-  </section>
 
   <!-- ===== TV section ===== -->
   <section id="sec-tv" class="page-section">
@@ -106,7 +72,6 @@
   <button id="back-to-top" class="back-to-top" title="Volver arriba">↑</button>
 
   <script src="app.js"></script>
-  <script src="worldcup.js"></script>
   <script src="padel.js"></script>
   <script>
     // Kick off every section's initial load together and only reveal the page
@@ -120,7 +85,6 @@
       };
       var loaders = [
         typeof fetchEvents === "function" ? fetchEvents : null,
-        typeof fetchWorldCup === "function" ? fetchWorldCup : null,
         typeof fetchPadelTournaments === "function" ? fetchPadelTournaments : null,
       ].filter(Boolean);
       Promise.allSettled(loaders.map(function (f) { return f(); })).then(hide);

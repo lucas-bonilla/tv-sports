@@ -9,12 +9,12 @@ const ORDER_VERSION_KEY = "sports-tv-filter-order-version";
 let allEvents = [];
 let activeFilter = null; // null = no sport selected → show all sports
 
-// --- Shared day filter (coordinates TV + World Cup) ---
+// --- Shared day filter (drives every section that registers days) ---
 //
 // One day bar at the top of the page drives every section. Days are keyed by
-// ISO date (YYYY-MM-DD) so the Spanish TV dates and the ISO World Cup dates can
-// share a single selection. Each section registers the ISO days it has and a
-// re-render callback; selecting a day re-renders all of them.
+// ISO date (YYYY-MM-DD) so the Spanish TV dates and any other section's ISO
+// dates can share a single selection. Each section registers the ISO days it
+// has and a re-render callback; selecting a day re-renders all of them.
 
 const MONTHS_ES_NUM = {
   enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6,
@@ -433,12 +433,7 @@ function buildQuickNav() {
     });
   }
 
-  // Always offer jumps to the World Cup and Padel sections at the bottom.
-  const wcSection = document.getElementById("sec-wc");
-  if (wcSection) {
-    items.push({ label: "🏆 Mundial", el: wcSection });
-  }
-
+  // Always offer a jump to the Padel section at the bottom.
   const padelSection = document.getElementById("sec-padel");
   if (padelSection) {
     items.push({ label: "🎾 Pádel", el: padelSection });
@@ -596,7 +591,6 @@ document.getElementById("events-container").addEventListener("click", e => {
 
 document.getElementById("refresh-btn").addEventListener("click", () => {
   fetchEvents();
-  if (typeof fetchWorldCup === "function") fetchWorldCup();
   if (typeof fetchPadelTournaments === "function") fetchPadelTournaments();
 });
 
@@ -624,7 +618,7 @@ if ("serviceWorker" in navigator) {
 }
 
 // The TV section contributes its ISO days to the shared bar and re-renders on
-// day selection. (World Cup registers itself from worldcup.js.)
+// day selection. It is currently the only registered date source.
 registerDateSource({
   getDays: () => [...new Set(allEvents.map(e => e._iso))],
   render: () => renderEvents(allEvents, activeFilter),
