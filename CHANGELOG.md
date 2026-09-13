@@ -34,10 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- **Sección Mundial 2026 y sus endpoints** (`/api/wc/matches`, `/api/wc/standings`,
-  `/api/wc/bracket`, `/api/wc/match/{id}`): el torneo ha terminado. Se retiran también
-  sus fuentes exclusivas (TheSportsDB, API-Football y el feed de Unidad Editorial) y
-  el cuadro de la fase eliminatoria. La parrilla de TV (Marca) y el pádel no cambian.
+- **World Cup 2026 section and its endpoints** (`/api/wc/matches`, `/api/wc/standings`, `/api/wc/bracket`, `/api/wc/match/{id}`): the tournament is over. Its exclusive data sources go with it (TheSportsDB, API-Football and the Unidad Editorial feed), along with `worldcup.js` and the knockout bracket. The TV schedule (Marca) and padel are untouched
 
 ### Fixed
 
