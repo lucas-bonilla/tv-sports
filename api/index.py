@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 import requests
 from bs4 import BeautifulSoup
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import asyncio
@@ -270,6 +271,15 @@ def get_padel_tournaments(year: int | None = None) -> dict:
         if status == "live" and live_slug is None:
             live_slug = t.get("slug")
 
+    # FIP national-team events (the World Cup) live outside the Premier Padel
+    # calendar; add them and, when one is on, open the section straight into it.
+    for t in fip_tournament_entries():
+        if t["start_date"][:4] != str(year):
+            continue
+        tournaments.append(t)
+        if t["status"] == "live":
+            live_slug = t["slug"]
+
     tournaments.sort(key=lambda x: x.get("start_date") or "")
     return {
         "year": year,
@@ -408,6 +418,279 @@ def get_padel_schedule(slug: str) -> dict:
         "type": raw.get("type"),
         "status": raw.get("status"),
         "days": [{"date": d, "matches": days[d]} for d in sorted(days.keys())],
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# --- FIP events (World Cup) ---
+#
+# FIP national-team events (the padel "Mundial") are not part of the Premier
+# Padel calendar. padelfip.com embeds server-rendered widgets from
+# widget.matchscorerlive.com, so we scrape those: the order of play by day
+# (`oopbyday/<id>/<n>`) and the group standings (`groups/<id>`). Each event is
+# listed in FIP_EVENTS and surfaced as one more tournament in the padel section
+# under its own slug.
+
+FIP_WIDGET = "https://widget.matchscorerlive.com/screen"
+
+FIP_EVENTS = {
+    "fip-world-cup-2026": {
+        "widget_id": "FIP-2026-4516",
+        "name": "MUNDIAL FIP",
+        "city": "Doha",
+        "country": "Qatar",
+        "category": "MUNDIAL",
+        "emoji": "🌍",
+        "start_date": "2026-11-02T00:00:00.000Z",
+        "end_date": "2026-11-07T23:59:59.000Z",
+        "tz": "Asia/Qatar",
+        "ticket_url": None,
+        "where_to_watch_url": "https://www.padelfip.com/events/fip-world-cup-2026-2/",
+    },
+}
+
+# matchscorerlive flags use IOC-style codes; map them to ISO 3166 alpha-2 so we
+# can render emoji flags. Unknown codes fall back to the raw code.
+FIP_IOC_TO_ISO2 = {
+    "ARG": "AR", "AUS": "AU", "BEL": "BE", "BRA": "BR", "CHI": "CL", "EGY": "EG",
+    "ESP": "ES", "FRA": "FR", "GBR": "GB", "GER": "DE", "INA": "ID", "ITA": "IT",
+    "MEX": "MX", "NED": "NL", "PAR": "PY", "POR": "PT", "QAT": "QA", "SWE": "SE",
+    "UAE": "AE", "USA": "US", "URU": "UY", "JPN": "JP", "KUW": "KW", "KSA": "SA",
+    "SUI": "CH", "AUT": "AT", "DEN": "DK", "FIN": "FI", "IRL": "IE", "POL": "PL",
+}
+
+# Standings come with English team names ("Spain", "Uae"); show Spanish ones.
+FIP_COUNTRY_ES = {
+    "ARG": "Argentina", "AUS": "Australia", "BEL": "Bélgica", "BRA": "Brasil",
+    "CHI": "Chile", "EGY": "Egipto", "ESP": "España", "FRA": "Francia",
+    "GBR": "Gran Bretaña", "GER": "Alemania", "INA": "Indonesia", "ITA": "Italia",
+    "MEX": "México", "NED": "Países Bajos", "PAR": "Paraguay", "POR": "Portugal",
+    "QAT": "Catar", "SWE": "Suecia", "UAE": "Emiratos Árabes", "USA": "Estados Unidos",
+}
+
+FIP_GENDER_ES = {"women": "Femenino", "men": "Masculino"}
+
+FIP_ROUND_ES = {
+    "group stage": "Fase de grupos",
+    "quarter-finals": "Cuartos de final", "quarterfinals": "Cuartos de final",
+    "semi-finals": "Semifinales", "semifinals": "Semifinales",
+    "final": "Final", "third place": "Tercer puesto", "3rd place": "Tercer puesto",
+}
+
+
+def fip_tournament_entries() -> list:
+    """FIP events shaped like get_padel_tournaments() entries."""
+    out = []
+    for slug, ev in FIP_EVENTS.items():
+        status = _padel_tournament_status({
+            "start_date_utc": ev["start_date"], "end_date_utc": ev["end_date"],
+        })
+        out.append({
+            "slug": slug,
+            "name": ev["name"],
+            "country": ev["country"],
+            "city": ev["city"],
+            "category": ev["category"],
+            "emoji": ev["emoji"],
+            "flag_url": None,
+            "start_date": ev["start_date"],
+            "end_date": ev["end_date"],
+            "prize_money": None,
+            "status": status,
+            "ticket_url": ev["ticket_url"],
+            "where_to_watch_url": ev["where_to_watch_url"],
+        })
+    return out
+
+
+def _fip_get(path: str) -> BeautifulSoup:
+    resp = requests.get(f"{FIP_WIDGET}/{path}", params={"t": "tol"}, headers=HEADERS, timeout=15)
+    resp.raise_for_status()
+    return BeautifulSoup(resp.text, "html.parser")
+
+
+def _fip_flag(code: str) -> str:
+    iso = FIP_IOC_TO_ISO2.get((code or "").upper())
+    if not iso:
+        return code or ""
+    return "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in iso)
+
+
+def _fip_team(row) -> dict:
+    names = [" ".join(n.get_text(" ", strip=True).split()) for n in row.select(".player-names .line-thin")]
+    img = row.select_one("img.flags")
+    code = img["src"].rsplit("/", 1)[-1].split(".")[0] if img and img.get("src") else ""
+    sets = []
+    for cell in row.select("td.set"):
+        sup = cell.find("sup")
+        tie = sup.extract().get_text(strip=True) if sup else None
+        games = cell.get_text(strip=True)
+        if not games or games == "-":
+            continue
+        sets.append(f"{games}({tie})" if tie else games)
+    label = " / ".join(n for n in names if n) or "TBD"
+    flag = _fip_flag(code)
+    return {
+        "label": f"{flag} {label}".strip(),
+        "score": " ".join(sets),
+        "won": bool(row.select_one(".check-primary")),
+    }
+
+
+def _fip_local_to_madrid(day, hhmm: str, tz: ZoneInfo):
+    """Venue-local date + 'HH:MM' -> (Madrid 'YYYY-MM-DD', Madrid 'HH:MM')."""
+    h, m = (int(x) for x in hhmm.split(":"))
+    local = datetime(day.year, day.month, day.day, h, m, tzinfo=tz)
+    mad = local.astimezone(MADRID_TZ)
+    return mad.strftime("%Y-%m-%d"), mad.strftime("%H:%M")
+
+
+def _fip_parse_day(soup: BeautifulSoup, day, tz: ZoneInfo) -> list:
+    matches = []
+    for court_order, header in enumerate(soup.select(".schedule-header")):
+        court_el = header.select_one(".oop-court")
+        court = court_el.get_text(" ", strip=True).title() if court_el else ""
+        start_el = header.select_one(".oop-court-start")
+        tm = _TIME_RE.search(start_el.get_text(" ", strip=True)) if start_el else None
+        court_start_local = _to_24h(int(tm.group(1)), int(tm.group(2) or 0), tm.group(3)) if tm else ""
+        date_str, court_start = (
+            _fip_local_to_madrid(day, court_start_local, tz) if court_start_local
+            else (day.isoformat(), "")
+        )
+
+        # The court's matches are the tables that follow its header inside the
+        # same column.
+        column = header.find_parent(class_="col-12") or header.parent
+        for table in column.find_all("table"):
+            rows = table.find_all("tr")
+            if len(rows) < 3:
+                continue
+            head_el = rows[0].select_one(".court-name")
+            head = head_el.get_text(" ", strip=True) if head_el else ""
+            # Rewrite the venue-local time in the header to Madrid time so
+            # _padel_slot labels it ("Desde 12:00", "No antes de 16:00").
+            hm = _TIME_RE.search(head)
+            if hm and (head.lower().startswith("starting") or head.lower().startswith("not before")):
+                local_t = _to_24h(int(hm.group(1)), int(hm.group(2) or 0), hm.group(3))
+                _, mad_t = _fip_local_to_madrid(day, local_t, tz)
+                head = ("Starting at " if head.lower().startswith("starting") else "Not before ") + mad_t
+            slot, slot_sort = _padel_slot(head, court_start, None)
+
+            round_el = rows[0].select_one(".round-name")
+            gender = round_text = ""
+            if round_el:
+                b = round_el.find("b")
+                gender = b.get_text(strip=True) if b else ""
+                rd = round_el.find("div")
+                round_text = rd.get_text(" ", strip=True) if rd else ""
+
+            team_a, team_b = _fip_team(rows[1]), _fip_team(rows[2])
+            summary = table.select_one(".live-status-summary")
+            summary_txt = summary.get_text(" ", strip=True).lower() if summary else ""
+            finished = any(k in summary_txt for k in ("completed", "retired", "walkover", "w.o."))
+            started = bool(re.search(r"\d{2}:\d{2}", summary_txt))
+            status = "F" if finished else "P" if started else None
+            stats = table.select_one("a.open[data-id]")
+
+            matches.append({
+                "match_id": stats.get("data-id") if stats else None,
+                "court": court,
+                "court_order": court_order,
+                "court_start": court_start,
+                "date": date_str,
+                "slot": slot,
+                "slot_sort": slot_sort,
+                "round": FIP_ROUND_ES.get(round_text.lower(), round_text),
+                "draw_type": FIP_GENDER_ES.get(gender.lower(), gender),
+                "status": status,
+                "status_title": None,
+                "team_a": team_a["label"],
+                "team_b": team_b["label"],
+                "score_a": team_a["score"],
+                "score_b": team_b["score"],
+                "winner": "a" if team_a["won"] else "b" if team_b["won"] else None,
+                "broadcast_url": None,
+            })
+    return matches
+
+
+def _fip_parse_groups(soup: BeautifulSoup) -> list:
+    draws = []
+    for draw in soup.select("[data-draw]"):
+        title_el = draw.select_one(".h4 span")
+        title = title_el.get_text(" ", strip=True) if title_el else ""
+        gender = "Femenino" if "WOMEN" in title.upper() else "Masculino" if "MEN" in title.upper() else title
+        groups = []
+        for caption in draw.select(".group-caption"):
+            body = caption.find_next_sibling(class_="group-body")
+            if not body:
+                continue
+            rows = []
+            for team_el in body.select(".group-team"):
+                line = team_el.parent
+                img = team_el.select_one("img.group-flag")
+                code = img["src"].rsplit("/", 1)[-1].split(".")[0] if img and img.get("src") else ""
+                pts = line.select_one(".group-pts")
+                rubs = line.select_one(".group-rubs")
+                rows.append({
+                    "team": FIP_COUNTRY_ES.get(code.upper(), team_el.get_text(" ", strip=True)),
+                    "flag": _fip_flag(code) if code else "",
+                    "points": pts.get_text(strip=True) if pts else "",
+                    "rubbers": rubs.get_text(" ", strip=True) if rubs else "",
+                })
+            name = caption.get_text(" ", strip=True).replace("Group", "Grupo")
+            groups.append({"name": name, "rows": rows})
+        if groups:
+            draws.append({"title": gender, "groups": groups})
+    return draws
+
+
+def get_fip_schedule(slug: str) -> dict:
+    ev = FIP_EVENTS[slug]
+    wid = ev["widget_id"]
+    tz = ZoneInfo(ev["tz"])
+    start = datetime.fromisoformat(ev["start_date"].replace("Z", "+00:00")).date()
+    end = datetime.fromisoformat(ev["end_date"].replace("Z", "+00:00")).date()
+    n_days = (end - start).days + 1
+
+    # One page per tournament day plus the standings; fetch them in parallel so
+    # the serverless call isn't n_days round trips long. A day that fails or
+    # isn't published yet just contributes no matches.
+    def fetch(path):
+        try:
+            return _fip_get(path)
+        except Exception as e:
+            logger.warning(f"FIP widget {path} failed: {e}")
+            return None
+
+    paths = [f"oopbyday/{wid}/{i}" for i in range(1, n_days + 1)] + [f"groups/{wid}"]
+    with ThreadPoolExecutor(max_workers=len(paths)) as pool:
+        pages = list(pool.map(fetch, paths))
+    if all(p is None for p in pages):
+        raise RuntimeError("FIP widgets unreachable")
+
+    days: dict = {}
+    for i, page in enumerate(pages[:n_days]):
+        if page is None:
+            continue
+        for m in _fip_parse_day(page, start + timedelta(days=i), tz):
+            days.setdefault(m["date"], []).append(m)
+
+    for day_matches in days.values():
+        # Keep FIP's own court order (Center Court, Grand Stand 1, ...) rather
+        # than an alphabetical one.
+        day_matches.sort(key=lambda x: (
+            x.get("court_start") or "99:99",
+            x.get("court_order", 99),
+            x.get("slot_sort", (5, "")),
+        ))
+
+    return {
+        "slug": slug,
+        "type": ev["category"],
+        "status": None,
+        "days": [{"date": d, "matches": days[d]} for d in sorted(days.keys())],
+        "standings": _fip_parse_groups(pages[-1]) if pages[-1] is not None else [],
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -556,7 +839,8 @@ async def padel_schedule(slug: str = Query(...)):
         if c and c["data"] and (now - c["ts"]) < PADEL_SCHEDULE_TTL:
             return c["data"]
         try:
-            data = await asyncio.to_thread(get_padel_schedule, slug)
+            fetcher = get_fip_schedule if slug in FIP_EVENTS else get_padel_schedule
+            data = await asyncio.to_thread(fetcher, slug)
             _padel_schedule_cache[slug] = {"data": data, "ts": now}
             total = sum(len(d["matches"]) for d in data["days"])
             logger.info(f"Padel schedule {slug}: {len(data['days'])} days, {total} matches")

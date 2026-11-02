@@ -720,6 +720,40 @@ main {
 .padel-team--won { font-weight: 700; }
 .padel-team--won .padel-team-score { color: var(--accent); }
 
+/* ===== World Cup group standings ===== */
+.padel-standings-body { padding: 0.5rem 0.85rem 0.75rem; }
+.padel-standings-draw {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0.5rem 0 0.35rem;
+}
+.padel-standings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.5rem;
+}
+.padel-standings {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+.padel-standings th {
+  text-align: left;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--accent);
+  padding: 0.2rem 0.3rem;
+  border-bottom: 1px solid var(--border);
+}
+.padel-standings td { padding: 0.2rem 0.3rem; color: var(--text); }
+.padel-standings th:not(:first-child),
+.padel-standings td:not(:first-child) { text-align: right; white-space: nowrap; }
+.padel-standings--top td:first-child { font-weight: 700; }
+
 /* Tighter court group headers in padel */
 #padel-container .sport-group-header { padding: 0.5rem 0.85rem; font-size: 0.78rem; }
 

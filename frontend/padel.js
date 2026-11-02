@@ -173,8 +173,11 @@ async function showPadelSchedule(slug) {
       ? `${tournament.emoji} ${tournament.name || tournament.country}${tournament.city ? ` · ${tournament.city}` : ""}`
       : slug;
 
+    // FIP national-team events (the World Cup) also return group standings.
+    const standings = renderStandings(data.standings);
+
     if (!data.days.length) {
-      container.innerHTML = `<div class="padel-schedule-title">${title}</div><div class="no-results">El cuadro de partidos aún no está disponible.</div>`;
+      container.innerHTML = `<div class="padel-schedule-title">${title}</div>${standings}<div class="no-results">El cuadro de partidos aún no está disponible.</div>`;
       return;
     }
 
@@ -199,7 +202,7 @@ async function showPadelSchedule(slug) {
         </div>`;
     }).join("");
 
-    container.innerHTML = `<div class="padel-schedule-title">${title}</div>${dayBlocks}`;
+    container.innerHTML = `<div class="padel-schedule-title">${title}</div>${standings}${dayBlocks}`;
 
     container.onclick = e => {
       const header = e.target.closest(".sport-group-header[data-toggle]");
@@ -217,6 +220,34 @@ async function showPadelSchedule(slug) {
   } catch (err) {
     container.innerHTML = `<div class="error-msg">❌ Error al cargar el cuadro.<br/><small>${err.message}</small></div>`;
   }
+}
+
+// Group standings (World Cup): one collapsible block, collapsed by default so
+// the order of play stays the first thing on screen.
+function renderStandings(draws) {
+  if (!draws || !draws.length) return "";
+  const tables = draws.map(draw => `
+    <div class="padel-standings-draw">${draw.title}</div>
+    <div class="padel-standings-grid">
+      ${draw.groups.map(g => `
+        <table class="padel-standings">
+          <thead><tr><th>${g.name}</th><th>Pts</th><th>Partidos</th></tr></thead>
+          <tbody>
+            ${g.rows.map((r, i) => `
+              <tr class="${i < 2 ? "padel-standings--top" : ""}">
+                <td>${i + 1}. ${r.flag} ${r.team}</td><td>${r.points}</td><td>${r.rubbers}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>`).join("")}
+    </div>`).join("");
+
+  return `
+    <div class="sport-group collapsed">
+      <div class="sport-group-header" data-toggle>
+        <span>📊 Clasificación de grupos</span><span class="chevron">›</span>
+      </div>
+      <div class="sport-group-body padel-standings-body">${tables}</div>
+    </div>`;
 }
 
 function renderMatch(m) {

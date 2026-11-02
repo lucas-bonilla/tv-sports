@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **FIP World Cup (Doha, 2–7 Nov 2026) in the padel section**: the padel "Mundial" is a national-team FIP event that the Premier Padel API doesn't list, so it is scraped from the `widget.matchscorerlive.com` widgets padelfip.com embeds (tournament `FIP-2026-4516`):
+  - Added to `/api/padel/tournaments` as `fip-world-cup-2026` (category `MUNDIAL`, 🌍); while it is live the section opens straight into it
+  - `/api/padel/schedule?slug=fip-world-cup-2026` returns the order of play for every day (fetched in parallel, a missing day just yields no matches) with live scores, plus a new `standings` field with the men's and women's group tables
+  - Court start times are converted from Doha time to Europe/Madrid
+  - Frontend: collapsible "Clasificación de grupos" block above the order of play; matches show flag emojis, round and men's/women's draw
+  - Further FIP events can be added to `FIP_EVENTS` in `api/index.py`
 - **Trimmed the day filter bar**: past days piled up, so the shared day bar now shows only the 2 most recent past days plus today and every future day
 - **Single full-page loader on initial load**: the TV schedule and padel sections used to load independently, so the page flashed "no hay datos" in one section before another filled in. A full-page overlay now covers the app until both initial fetches settle (coordinated in `index.html` with `Promise.allSettled`), then fades out — with a 15s safety net so a hung request never traps the page. The per-section fetches are no longer self-invoked; the coordinator orchestrates them
 - **Shared cache helpers via Upstash Redis (optional)**: Vercel's per-instance in-memory caches die on cold start, so when `KV_REST_API_URL`/`KV_REST_API_TOKEN` are configured the app can use Redis as a shared cache and historical store. Degrades gracefully to in-memory/live when Redis isn't configured (no new dependency — uses the Upstash REST API over `requests`). No endpoint uses the helpers right now — the World Cup was their only consumer
