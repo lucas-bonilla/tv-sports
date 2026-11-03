@@ -692,6 +692,14 @@ main {
   border-radius: 4px;
   padding: 0.02rem 0.28rem;
 }
+.padel-watch {
+  margin-left: auto;
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: #f85149;
+  text-decoration: none;
+}
+.padel-watch:hover { text-decoration: underline; }
 .padel-match-teams {
   display: flex;
   flex-direction: column;

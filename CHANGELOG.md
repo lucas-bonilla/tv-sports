@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Court start times are converted from Doha time to Europe/Madrid
   - Frontend: collapsible "Clasificación de grupos" block above the order of play; matches show flag emojis, round and men's/women's draw
   - Further FIP events can be added to `FIP_EVENTS` in `api/index.py`
+  - matchscorerlive often publishes a day's order of play only shortly before play, so a day it hasn't covered yet is backfilled from the event page's streaming list: one card per streamed tie (country vs country, Madrid start time, YouTube link). Ties FIP doesn't stream only appear once the widget fills the day in
+  - Multi-day schedules open on today, then the days ahead, then past days (most recent first)
+  - Matches with a `broadcast_url` show a "▶ Ver" link (also applies to Premier Padel)
 - **Trimmed the day filter bar**: past days piled up, so the shared day bar now shows only the 2 most recent past days plus today and every future day
 - **Single full-page loader on initial load**: the TV schedule and padel sections used to load independently, so the page flashed "no hay datos" in one section before another filled in. A full-page overlay now covers the app until both initial fetches settle (coordinated in `index.html` with `Promise.allSettled`), then fades out — with a 15s safety net so a hung request never traps the page. The per-section fetches are no longer self-invoked; the coordinator orchestrates them
 - **Shared cache helpers via Upstash Redis (optional)**: Vercel's per-instance in-memory caches die on cold start, so when `KV_REST_API_URL`/`KV_REST_API_TOKEN` are configured the app can use Redis as a shared cache and historical store. Degrades gracefully to in-memory/live when Redis isn't configured (no new dependency — uses the Upstash REST API over `requests`). No endpoint uses the helpers right now — the World Cup was their only consumer

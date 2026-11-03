@@ -468,6 +468,15 @@ FIP_COUNTRY_ES = {
     "QAT": "Catar", "SWE": "Suecia", "UAE": "Emiratos Árabes", "USA": "Estados Unidos",
 }
 
+# The FIP event page titles its streams in English ("🇳🇱 Netherlands vs USA 🇺🇸").
+FIP_COUNTRY_EN_TO_CODE = {
+    "argentina": "ARG", "australia": "AUS", "belgium": "BEL", "brazil": "BRA",
+    "chile": "CHI", "egypt": "EGY", "spain": "ESP", "france": "FRA",
+    "great britain": "GBR", "germany": "GER", "indonesia": "INA", "italy": "ITA",
+    "mexico": "MEX", "netherlands": "NED", "paraguay": "PAR", "portugal": "POR",
+    "qatar": "QAT", "sweden": "SWE", "uae": "UAE", "usa": "USA",
+}
+
 FIP_GENDER_ES = {"women": "Femenino", "men": "Masculino"}
 
 FIP_ROUND_ES = {
@@ -645,6 +654,68 @@ def _fip_parse_groups(soup: BeautifulSoup) -> list:
     return draws
 
 
+def _fip_stream_team(name: str) -> str:
+    code = FIP_COUNTRY_EN_TO_CODE.get(name.strip().lower())
+    if not code:
+        return name.strip()
+    return f"{_fip_flag(code)} {FIP_COUNTRY_ES.get(code, name.strip())}"
+
+
+def _fip_parse_streams(soup: BeautifulSoup) -> list:
+    """Ties from the event page's live-streaming list, one card per tie.
+
+    matchscorerlive only publishes a day's order of play once the referees load
+    it, often just before play starts. The event page lists every streamed tie
+    with its start time well ahead, so it backfills days the widget hasn't
+    covered yet: country vs country, no players or scores. Ties FIP doesn't
+    stream are missing here until the widget fills the day in.
+    """
+    matches = []
+    for card in soup.select("a.bw-yt-slot"):
+        when = card.select_one("time[datetime]")
+        name = card.select_one(".bw-yt-slot__name")
+        if not when or not name:
+            continue
+        try:
+            start = datetime.fromisoformat(when["datetime"]).astimezone(MADRID_TZ)
+        except ValueError:
+            continue
+        title = re.sub(r"^\[[A-Z]+\]\s*", "", name.get_text(" ", strip=True))
+        title = re.sub("[\U0001F1E6-\U0001F1FF]", "", title)
+        if " vs " not in title:
+            continue
+        home, away = title.split(" vs ", 1)
+
+        tags_el = card.select_one(".bw-yt-tags")
+        tags = [t.strip() for t in tags_el.get_text("·").split("·")] if tags_el else []
+        tags = [t for t in tags if t]
+        gender = FIP_GENDER_ES.get(tags[0].lower(), tags[0].title()) if tags else ""
+        rest = [t.title().replace("Group Phase", "Fase de grupos").replace("Group", "Grupo") for t in tags[1:3]]
+
+        hhmm = start.strftime("%H:%M")
+        live = bool(card.find_parent(class_="bw-yt-group--live")) and not card.find_parent(class_="bw-yt-group--soon")
+        matches.append({
+            "match_id": card.get("data-yt"),
+            "court": f"Eliminatorias · {gender}" if gender else "Eliminatorias",
+            "court_order": 0 if gender == "Femenino" else 1,
+            "court_start": hhmm,
+            "date": start.strftime("%Y-%m-%d"),
+            "slot": f"Desde {hhmm}",
+            "slot_sort": (0, hhmm),
+            "round": " · ".join(rest),
+            "draw_type": gender,
+            "status": "P" if live else None,
+            "status_title": None,
+            "team_a": _fip_stream_team(home),
+            "team_b": _fip_stream_team(away),
+            "score_a": "",
+            "score_b": "",
+            "winner": None,
+            "broadcast_url": card.get("href"),
+        })
+    return matches
+
+
 def get_fip_schedule(slug: str) -> dict:
     ev = FIP_EVENTS[slug]
     wid = ev["widget_id"]
@@ -663,10 +734,21 @@ def get_fip_schedule(slug: str) -> dict:
             logger.warning(f"FIP widget {path} failed: {e}")
             return None
 
+    def fetch_event_page():
+        try:
+            resp = requests.get(ev["where_to_watch_url"], headers=HEADERS, timeout=15)
+            resp.raise_for_status()
+            return BeautifulSoup(resp.text, "html.parser")
+        except Exception as e:
+            logger.warning(f"FIP event page failed: {e}")
+            return None
+
     paths = [f"oopbyday/{wid}/{i}" for i in range(1, n_days + 1)] + [f"groups/{wid}"]
-    with ThreadPoolExecutor(max_workers=len(paths)) as pool:
+    with ThreadPoolExecutor(max_workers=len(paths) + 1) as pool:
+        event_future = pool.submit(fetch_event_page)
         pages = list(pool.map(fetch, paths))
-    if all(p is None for p in pages):
+        event_page = event_future.result()
+    if all(p is None for p in pages) and event_page is None:
         raise RuntimeError("FIP widgets unreachable")
 
     days: dict = {}
@@ -675,6 +757,17 @@ def get_fip_schedule(slug: str) -> dict:
             continue
         for m in _fip_parse_day(page, start + timedelta(days=i), tz):
             days.setdefault(m["date"], []).append(m)
+
+    # Backfill days the order-of-play widget hasn't published yet from the
+    # event page's streaming list. A day the widget covers is never mixed with
+    # stream cards: the widget has players and live scores.
+    if event_page is not None:
+        streamed: dict = {}
+        for m in _fip_parse_streams(event_page):
+            streamed.setdefault(m["date"], []).append(m)
+        for d, ms in streamed.items():
+            if d not in days:
+                days[d] = ms
 
     for day_matches in days.values():
         # Keep FIP's own court order (Center Court, Grand Stand 1, ...) rather

@@ -181,7 +181,15 @@ async function showPadelSchedule(slug) {
       return;
     }
 
-    const dayBlocks = data.days.map(day => {
+    // Today first, then the days ahead, then past days (most recent first), so
+    // a multi-day event opens on today's order of play instead of day one.
+    const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" });
+    const days = [
+      ...data.days.filter(d => d.date >= today),
+      ...data.days.filter(d => d.date < today).reverse(),
+    ];
+
+    const dayBlocks = days.map(day => {
       const byCourt = {};
       day.matches.forEach(m => { (byCourt[m.court] ||= []).push(m); });
 
@@ -207,6 +215,7 @@ async function showPadelSchedule(slug) {
     container.onclick = e => {
       const header = e.target.closest(".sport-group-header[data-toggle]");
       if (header) { header.closest(".sport-group").classList.toggle("collapsed"); return; }
+      if (e.target.closest("a")) return; // stream link: follow it, don't open the calendar
 
       const card = e.target.closest(".padel-match[data-padel-event]");
       if (card) openPadelCalendar(JSON.parse(decodeURIComponent(card.dataset.padelEvent)));
@@ -269,6 +278,7 @@ function renderMatch(m) {
   const tags = [
     m.round ? `<span class="event-competition">${m.round}</span>` : "",
     m.draw_type ? `<span class="padel-draw">${m.draw_type}</span>` : "",
+    m.broadcast_url ? `<a class="padel-watch" href="${m.broadcast_url}" target="_blank" rel="noopener">▶ Ver</a>` : "",
   ].join("");
 
   const teamRow = (team, score, side) => {
