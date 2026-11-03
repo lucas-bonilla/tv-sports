@@ -540,6 +540,7 @@ def _fip_team(row) -> dict:
     label = " / ".join(n for n in names if n) or "TBD"
     flag = _fip_flag(code)
     return {
+        "code": code.upper(),
         "label": f"{flag} {label}".strip(),
         "score": " ".join(sets),
         "won": bool(row.select_one(".check-primary")),
@@ -615,6 +616,8 @@ def _fip_parse_day(soup: BeautifulSoup, day, tz: ZoneInfo) -> list:
                 "status_title": None,
                 "team_a": team_a["label"],
                 "team_b": team_b["label"],
+                "country_a": team_a["code"],
+                "country_b": team_b["code"],
                 "score_a": team_a["score"],
                 "score_b": team_b["score"],
                 "winner": "a" if team_a["won"] else "b" if team_b["won"] else None,
@@ -661,30 +664,59 @@ def _fip_stream_team(name: str) -> str:
     return f"{_fip_flag(code)} {FIP_COUNTRY_ES.get(code, name.strip())}"
 
 
-def _fip_parse_streams(soup: BeautifulSoup) -> list:
+_EN_MONTHS = {m: i for i, m in enumerate(
+    ["january", "february", "march", "april", "may", "june", "july",
+     "august", "september", "october", "november", "december"], 1)}
+
+
+def _fip_parse_streams(soup: BeautifulSoup, year: int) -> list:
     """Ties from the event page's live-streaming list, one card per tie.
 
     matchscorerlive only publishes a day's order of play once the referees load
-    it, often just before play starts. The event page lists every streamed tie
-    with its start time well ahead, so it backfills days the widget hasn't
-    covered yet: country vs country, no players or scores. Ties FIP doesn't
-    stream are missing here until the widget fills the day in.
+    it, often just before play starts. The event page lists every streamed tie,
+    so it backfills days the widget hasn't covered yet (country vs country, no
+    players or scores) and gives every tie its YouTube link. The list has three
+    sections and each says when a tie is played differently:
+      "Coming up" — a <time datetime> per card
+      "Live now"  — no time; it is being played today
+      "Replays"   — grouped under a day title ("Monday 2 November")
+    Each card gets a `kind` of upcoming / live / replay. Ties FIP doesn't stream
+    never appear here.
     """
+    today = datetime.now(MADRID_TZ).strftime("%Y-%m-%d")
     matches = []
-    for card in soup.select("a.bw-yt-slot"):
-        when = card.select_one("time[datetime]")
-        name = card.select_one(".bw-yt-slot__name")
-        if not when or not name:
-            continue
-        try:
-            start = datetime.fromisoformat(when["datetime"]).astimezone(MADRID_TZ)
-        except ValueError:
-            continue
-        title = re.sub(r"^\[[A-Z]+\]\s*", "", name.get_text(" ", strip=True))
-        title = re.sub("[\U0001F1E6-\U0001F1FF]", "", title)
+    for card in soup.select("a[data-yt]"):
+        name = card.select_one(".bw-yt-slot__name, .bw-yt-title")
+        title = card.get("data-title") or (name.get_text(" ", strip=True) if name else "")
+        title = re.sub(r"^\[[A-Z]+\]\s*", "", title)
+        title = re.sub("[\U0001F1E6-\U0001F1FF]", "", title).strip()
         if " vs " not in title:
             continue
         home, away = title.split(" vs ", 1)
+        code_a = FIP_COUNTRY_EN_TO_CODE.get(home.strip().lower(), "")
+        code_b = FIP_COUNTRY_EN_TO_CODE.get(away.strip().lower(), "")
+
+        when = card.select_one("time[datetime]")
+        day_title = card.find_parent(class_="bw-yt-day")
+        live_section = card.find_parent(class_="bw-yt-group--live")
+        hhmm = ""
+        if when:
+            try:
+                start = datetime.fromisoformat(when["datetime"]).astimezone(MADRID_TZ)
+            except ValueError:
+                continue
+            date, hhmm, kind = start.strftime("%Y-%m-%d"), start.strftime("%H:%M"), "upcoming"
+        elif live_section and "bw-yt-group--soon" not in (live_section.get("class") or []):
+            date, kind = today, "live"
+        elif day_title:
+            head = day_title.select_one(".bw-yt-day__title")
+            parts = (head.get_text(" ", strip=True) if head else "").lower().split()
+            month = _EN_MONTHS.get(parts[-1]) if parts else None
+            if not month or not parts[-2].isdigit():
+                continue
+            date, kind = f"{year}-{month:02d}-{int(parts[-2]):02d}", "replay"
+        else:
+            continue
 
         tags_el = card.select_one(".bw-yt-tags")
         tags = [t.strip() for t in tags_el.get_text("·").split("·")] if tags_el else []
@@ -692,22 +724,23 @@ def _fip_parse_streams(soup: BeautifulSoup) -> list:
         gender = FIP_GENDER_ES.get(tags[0].lower(), tags[0].title()) if tags else ""
         rest = [t.title().replace("Group Phase", "Fase de grupos").replace("Group", "Grupo") for t in tags[1:3]]
 
-        hhmm = start.strftime("%H:%M")
-        live = bool(card.find_parent(class_="bw-yt-group--live")) and not card.find_parent(class_="bw-yt-group--soon")
         matches.append({
+            "kind": kind,
             "match_id": card.get("data-yt"),
             "court": f"Eliminatorias · {gender}" if gender else "Eliminatorias",
             "court_order": 0 if gender == "Femenino" else 1,
             "court_start": hhmm,
-            "date": start.strftime("%Y-%m-%d"),
-            "slot": f"Desde {hhmm}",
+            "date": date,
+            "slot": f"Desde {hhmm}" if hhmm else "",
             "slot_sort": (0, hhmm),
             "round": " · ".join(rest),
             "draw_type": gender,
-            "status": "P" if live else None,
+            "status": "P" if kind == "live" else None,
             "status_title": None,
             "team_a": _fip_stream_team(home),
             "team_b": _fip_stream_team(away),
+            "country_a": code_a,
+            "country_b": code_b,
             "score_a": "",
             "score_b": "",
             "winner": None,
@@ -762,12 +795,28 @@ def get_fip_schedule(slug: str) -> dict:
     # event page's streaming list. A day the widget covers is never mixed with
     # stream cards: the widget has players and live scores.
     if event_page is not None:
+        stream_cards = _fip_parse_streams(event_page, start.year)
         streamed: dict = {}
-        for m in _fip_parse_streams(event_page):
-            streamed.setdefault(m["date"], []).append(m)
+        for m in stream_cards:
+            # Replays only lend their link: a played tie without its score
+            # would be worse than the widget's day, which exists by then.
+            if m["kind"] != "replay":
+                streamed.setdefault(m["date"], []).append(m)
         for d, ms in streamed.items():
             if d not in days:
                 days[d] = ms
+
+        # The widget carries no stream links: give each widget match the link
+        # of its tie (same day, same two countries) so "▶ Ver" survives once
+        # the full order of play replaces the stream cards.
+        links = {
+            (m["date"], frozenset((m["country_a"], m["country_b"]))): m["broadcast_url"]
+            for m in stream_cards if m["country_a"] and m["country_b"] and m["broadcast_url"]
+        }
+        for d, ms in days.items():
+            for m in ms:
+                if not m.get("broadcast_url"):
+                    m["broadcast_url"] = links.get((d, frozenset((m.get("country_a"), m.get("country_b")))))
 
     for day_matches in days.values():
         # Keep FIP's own court order (Center Court, Grand Stand 1, ...) rather

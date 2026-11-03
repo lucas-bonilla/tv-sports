@@ -156,6 +156,8 @@ function buildPadelCalendar() {
 
 // --- Tournament schedule (order of play) ---
 
+let padelSchedule = null; // { slug, data, title, live } of the schedule on screen
+
 async function showPadelSchedule(slug) {
   const container = document.getElementById("padel-container");
   if (selectedSlug !== slug) container.innerHTML = '<div class="spinner"></div>';
@@ -173,62 +175,94 @@ async function showPadelSchedule(slug) {
       ? `${tournament.emoji} ${tournament.name || tournament.country}${tournament.city ? ` · ${tournament.city}` : ""}`
       : slug;
 
-    // FIP national-team events (the World Cup) also return group standings.
-    const standings = renderStandings(data.standings);
-
-    if (!data.days.length) {
-      container.innerHTML = `<div class="padel-schedule-title">${title}</div>${standings}<div class="no-results">El cuadro de partidos aún no está disponible.</div>`;
-      return;
-    }
-
-    // Today first, then the days ahead, then past days (most recent first), so
-    // a multi-day event opens on today's order of play instead of day one.
-    const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" });
-    const days = [
-      ...data.days.filter(d => d.date >= today),
-      ...data.days.filter(d => d.date < today).reverse(),
-    ];
-
-    const dayBlocks = days.map(day => {
-      const byCourt = {};
-      day.matches.forEach(m => { (byCourt[m.court] ||= []).push(m); });
-
-      const courtBlocks = Object.entries(byCourt).map(([court, matches]) => `
-        <div class="sport-group">
-          <div class="sport-group-header" data-toggle>
-            <span>🎾 ${court}</span><span class="chevron">›</span>
-          </div>
-          <div class="sport-group-body">
-            ${matches.map(renderMatch).join("")}
-          </div>
-        </div>`).join("");
-
-      return `
-        <div class="day-section">
-          <div class="day-header">${fmtDayHeader(day.date)}</div>
-          ${courtBlocks}
-        </div>`;
-    }).join("");
-
-    container.innerHTML = `<div class="padel-schedule-title">${title}</div>${standings}${dayBlocks}`;
-
-    container.onclick = e => {
-      const header = e.target.closest(".sport-group-header[data-toggle]");
-      if (header) { header.closest(".sport-group").classList.toggle("collapsed"); return; }
-      if (e.target.closest("a")) return; // stream link: follow it, don't open the calendar
-
-      const card = e.target.closest(".padel-match[data-padel-event]");
-      if (card) openPadelCalendar(JSON.parse(decodeURIComponent(card.dataset.padelEvent)));
-    };
-
-    container.onkeydown = e => {
-      if (e.key !== "Enter" && e.key !== " ") return;
-      const card = e.target.closest(".padel-match[data-padel-event]");
-      if (card) { e.preventDefault(); openPadelCalendar(JSON.parse(decodeURIComponent(card.dataset.padelEvent))); }
-    };
+    // Only a live tournament follows the shared day bar at the top: its days
+    // overlap the TV schedule's. A finished one opened from the calendar has
+    // days the bar doesn't show, so it keeps listing all of them.
+    padelSchedule = { slug, data, title, live: tournament?.status === "live" };
+    if (typeof buildGlobalDateBar === "function") buildGlobalDateBar();
+    renderPadelSchedule();
   } catch (err) {
     container.innerHTML = `<div class="error-msg">❌ Error al cargar el cuadro.<br/><small>${err.message}</small></div>`;
   }
+}
+
+function renderPadelSchedule() {
+  if (!padelSchedule) return;
+  const container = document.getElementById("padel-container");
+  const { data, title, live } = padelSchedule;
+
+  // FIP national-team events (the World Cup) also return group standings.
+  const standings = renderStandings(data.standings);
+
+  if (!data.days.length) {
+    container.innerHTML = `<div class="padel-schedule-title">${title}</div>${standings}<div class="no-results">El cuadro de partidos aún no está disponible.</div>`;
+    return;
+  }
+
+  let days;
+  const selected = live && typeof globalDateISO !== "undefined" ? globalDateISO : null;
+  if (selected) {
+    days = data.days.filter(d => d.date === selected);
+  } else {
+    // No day picked: today first, then the days ahead, then past days (most
+    // recent first), so a multi-day event opens on today's order of play.
+    const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" });
+    days = [
+      ...data.days.filter(d => d.date >= today),
+      ...data.days.filter(d => d.date < today).reverse(),
+    ];
+  }
+
+  const dayBlocks = days.map(day => {
+    const byCourt = {};
+    day.matches.forEach(m => { (byCourt[m.court] ||= []).push(m); });
+
+    const courtBlocks = Object.entries(byCourt).map(([court, matches]) => `
+      <div class="sport-group">
+        <div class="sport-group-header" data-toggle>
+          <span>🎾 ${court}</span><span class="chevron">›</span>
+        </div>
+        <div class="sport-group-body">
+          ${matches.map(renderMatch).join("")}
+        </div>
+      </div>`).join("");
+
+    return `
+      <div class="day-section">
+        <div class="day-header">${fmtDayHeader(day.date)}</div>
+        ${courtBlocks}
+      </div>`;
+  }).join("") || `<div class="no-results">${
+    selected >= new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" })
+      ? `El orden de juego del ${fmtDayHeader(selected)} aún no está publicado.`
+      : `No hubo partidos el ${fmtDayHeader(selected)}.`
+  }</div>`;
+
+  container.innerHTML = `<div class="padel-schedule-title">${title}</div>${standings}${dayBlocks}`;
+
+  container.onclick = e => {
+    const header = e.target.closest(".sport-group-header[data-toggle]");
+    if (header) { header.closest(".sport-group").classList.toggle("collapsed"); return; }
+    if (e.target.closest("a")) return; // stream link: follow it, don't open the calendar
+
+    const card = e.target.closest(".padel-match[data-padel-event]");
+    if (card) openPadelCalendar(JSON.parse(decodeURIComponent(card.dataset.padelEvent)));
+  };
+
+  container.onkeydown = e => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const card = e.target.closest(".padel-match[data-padel-event]");
+    if (card) { e.preventDefault(); openPadelCalendar(JSON.parse(decodeURIComponent(card.dataset.padelEvent))); }
+  };
+}
+
+// The live tournament's days join the shared day bar, and picking a day there
+// filters its order of play just like the TV schedule.
+if (typeof registerDateSource === "function") {
+  registerDateSource({
+    getDays: () => (padelSchedule?.live ? padelSchedule.data.days.map(d => d.date) : []),
+    render: renderPadelSchedule,
+  });
 }
 
 // Group standings (World Cup): one collapsible block, collapsed by default so

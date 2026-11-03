@@ -618,7 +618,7 @@ if ("serviceWorker" in navigator) {
 }
 
 // The TV section contributes its ISO days to the shared bar and re-renders on
-// day selection. It is currently the only registered date source.
+// day selection. padel.js registers the live padel tournament as another source.
 registerDateSource({
   getDays: () => [...new Set(allEvents.map(e => e._iso))],
   render: () => renderEvents(allEvents, activeFilter),
