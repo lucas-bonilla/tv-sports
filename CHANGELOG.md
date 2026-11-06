@@ -11,11 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **FIP World Cup (Doha, 2–7 Nov 2026) in the padel section**: the padel "Mundial" is a national-team FIP event that the Premier Padel API doesn't list, so it is scraped from the `widget.matchscorerlive.com` widgets padelfip.com embeds (tournament `FIP-2026-4516`):
   - Added to `/api/padel/tournaments` as `fip-world-cup-2026` (category `MUNDIAL`, 🌍); while it is live the section opens straight into it
-  - `/api/padel/schedule?slug=fip-world-cup-2026` returns the order of play for every day (fetched in parallel, a missing day just yields no matches) with live scores, plus a new `standings` field with the men's and women's group tables
+  - `/api/padel/schedule?slug=fip-world-cup-2026` returns the order of play for every day (fetched in parallel, a missing day just yields no matches) with live scores, plus a `bracket` field with each draw's knockout rounds, third-place tie and placement rounds, read from the widget's `teamresults` pages
   - Court start times are converted from Doha time to Europe/Madrid
-  - Frontend: collapsible "Clasificación de grupos" block above the order of play; matches show flag emojis, round and men's/women's draw
+  - Frontend: collapsible "Cuadro" block above the order of play (the group standings it replaced are gone now the group stage is over); the final and third-place tie show "Por definir" until the semifinals settle them; matches show flag emojis, round and men's/women's draw
   - Further FIP events can be added to `FIP_EVENTS` in `api/index.py`
   - matchscorerlive often publishes a day's order of play only shortly before play, so a day it hasn't covered yet is backfilled from the event page's streaming list: one card per streamed tie (country vs country, Madrid start time, YouTube link). Ties FIP doesn't stream only appear once the widget fills the day in
+  - A knockout day without a published order of play falls back to one card per tie from the `teamresults` pages, which keeps today visible when the event page is unreachable
   - Multi-day schedules open on today, then the days ahead, then past days (most recent first)
   - A live padel tournament now follows the shared day bar at the top: picking a day shows only that day's order of play, like the TV schedule, and its days join the bar. Finished tournaments opened from the calendar still list every day
   - Matches with a `broadcast_url` show a "▶ Ver" link (also applies to Premier Padel). World Cup links come from the event page's streaming list (upcoming, live and replay sections) and are matched to the widget's matches by day and countries, so they survive once the full order of play is published

@@ -728,39 +728,78 @@ main {
 .padel-team--won { font-weight: 700; }
 .padel-team--won .padel-team-score { color: var(--accent); }
 
-/* ===== World Cup group standings ===== */
-.padel-standings-body { padding: 0.5rem 0.85rem 0.75rem; }
-.padel-standings-draw {
+/* ===== World Cup knockout bracket ===== */
+.padel-bracket-body { padding: 0.5rem 0.85rem 0.75rem; }
+.padel-bracket-draw {
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--muted);
-  margin: 0.5rem 0 0.35rem;
+  margin: 0.75rem 0 0.35rem;
 }
-.padel-standings-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 0.5rem;
+.padel-bracket-draw:first-child { margin-top: 0.25rem; }
+/* Rounds side by side, ties evenly spaced so each one sits level with the pair
+   that feeds it. Scrolls sideways inside its own box on a phone. */
+.padel-bracket {
+  display: flex;
+  gap: 0.6rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
 }
-.padel-standings {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
+.padel-bracket-round {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 145px;
+  min-width: 0;
 }
-.padel-standings th {
-  text-align: left;
+.padel-bracket-round-name {
   font-size: 0.68rem;
   font-weight: 700;
   color: var(--accent);
-  padding: 0.2rem 0.3rem;
-  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.3rem;
 }
-.padel-standings td { padding: 0.2rem 0.3rem; color: var(--text); }
-.padel-standings th:not(:first-child),
-.padel-standings td:not(:first-child) { text-align: right; white-space: nowrap; }
-.padel-standings--top td:first-child { font-weight: 700; }
+.padel-bracket-ties {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  gap: 0.4rem;
+  flex: 1;
+}
+.padel-tie {
+  background: var(--sport-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.25rem 0.4rem;
+}
+.padel-tie--live { border-color: #f85149; }
+.padel-tie-team {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.4rem;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.padel-tie-team--won { font-weight: 700; color: var(--text); }
+.padel-tie-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.padel-tie-score {
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.padel-bracket-third { margin-top: 0.5rem; max-width: 220px; }
+.padel-bracket-placement { margin-top: 0.5rem; }
+.padel-bracket-placement summary {
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
 
 /* Tighter court group headers in padel */
 #padel-container .sport-group-header { padding: 0.5rem 0.85rem; font-size: 0.78rem; }

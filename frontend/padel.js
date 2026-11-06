@@ -191,11 +191,11 @@ function renderPadelSchedule() {
   const container = document.getElementById("padel-container");
   const { data, title, live } = padelSchedule;
 
-  // FIP national-team events (the World Cup) also return group standings.
-  const standings = renderStandings(data.standings);
+  // FIP national-team events (the World Cup) also return a knockout bracket.
+  const bracket = renderBracket(data.bracket);
 
   if (!data.days.length) {
-    container.innerHTML = `<div class="padel-schedule-title">${title}</div>${standings}<div class="no-results">El cuadro de partidos aún no está disponible.</div>`;
+    container.innerHTML = `<div class="padel-schedule-title">${title}</div>${bracket}<div class="no-results">El cuadro de partidos aún no está disponible.</div>`;
     return;
   }
 
@@ -238,7 +238,7 @@ function renderPadelSchedule() {
       : `No hubo partidos el ${fmtDayHeader(selected)}.`
   }</div>`;
 
-  container.innerHTML = `<div class="padel-schedule-title">${title}</div>${standings}${dayBlocks}`;
+  container.innerHTML = `<div class="padel-schedule-title">${title}</div>${bracket}${dayBlocks}`;
 
   container.onclick = e => {
     const header = e.target.closest(".sport-group-header[data-toggle]");
@@ -265,31 +265,54 @@ if (typeof registerDateSource === "function") {
   });
 }
 
-// Group standings (World Cup): one collapsible block, collapsed by default so
-// the order of play stays the first thing on screen.
-function renderStandings(draws) {
+// Knockout bracket (World Cup): the title bracket of each draw as columns, with
+// the placement rounds folded away underneath.
+function renderBracketTie(t) {
+  const side = (team, score, key) => `
+    <div class="padel-tie-team ${t.winner === key ? "padel-tie-team--won" : ""}">
+      <span class="padel-tie-name">${team}</span>
+      <span class="padel-tie-score">${t.status ? score : ""}</span>
+    </div>`;
+  return `
+    <div class="padel-tie ${t.status === "P" ? "padel-tie--live" : ""}">
+      ${side(t.team_a, t.score_a, "a")}
+      ${side(t.team_b, t.score_b, "b")}
+    </div>`;
+}
+
+function renderBracketRounds(rounds) {
+  return `
+    <div class="padel-bracket">
+      ${rounds.map(r => `
+        <div class="padel-bracket-round">
+          <div class="padel-bracket-round-name">${r.name}</div>
+          <div class="padel-bracket-ties">${r.ties.map(renderBracketTie).join("")}</div>
+        </div>`).join("")}
+    </div>`;
+}
+
+function renderBracket(draws) {
   if (!draws || !draws.length) return "";
-  const tables = draws.map(draw => `
-    <div class="padel-standings-draw">${draw.title}</div>
-    <div class="padel-standings-grid">
-      ${draw.groups.map(g => `
-        <table class="padel-standings">
-          <thead><tr><th>${g.name}</th><th>Pts</th><th>Partidos</th></tr></thead>
-          <tbody>
-            ${g.rows.map((r, i) => `
-              <tr class="${i < 2 ? "padel-standings--top" : ""}">
-                <td>${i + 1}. ${r.flag} ${r.team}</td><td>${r.points}</td><td>${r.rubbers}</td>
-              </tr>`).join("")}
-          </tbody>
-        </table>`).join("")}
-    </div>`).join("");
+  const body = draws.map(draw => `
+    <div class="padel-bracket-draw">${draw.title}</div>
+    ${renderBracketRounds(draw.rounds)}
+    ${draw.third ? `
+      <div class="padel-bracket-third">
+        <div class="padel-bracket-round-name">Tercer puesto</div>
+        ${renderBracketTie(draw.third)}
+      </div>` : ""}
+    ${draw.placement.map(p => `
+      <details class="padel-bracket-placement">
+        <summary>${p.name}</summary>
+        ${renderBracketRounds(p.rounds)}
+      </details>`).join("")}`).join("");
 
   return `
-    <div class="sport-group collapsed">
+    <div class="sport-group">
       <div class="sport-group-header" data-toggle>
-        <span>📊 Clasificación de grupos</span><span class="chevron">›</span>
+        <span>🏆 Cuadro</span><span class="chevron">›</span>
       </div>
-      <div class="sport-group-body padel-standings-body">${tables}</div>
+      <div class="sport-group-body padel-bracket-body">${body}</div>
     </div>`;
 }
 

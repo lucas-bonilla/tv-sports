@@ -427,7 +427,7 @@ def get_padel_schedule(slug: str) -> dict:
 # FIP national-team events (the padel "Mundial") are not part of the Premier
 # Padel calendar. padelfip.com embeds server-rendered widgets from
 # widget.matchscorerlive.com, so we scrape those: the order of play by day
-# (`oopbyday/<id>/<n>`) and the group standings (`groups/<id>`). Each event is
+# (`oopbyday/<id>/<n>`) and the knockout ties (`teamresults/<id>/<n>`). Each event is
 # listed in FIP_EVENTS and surfaced as one more tournament in the padel section
 # under its own slug.
 
@@ -443,6 +443,7 @@ FIP_EVENTS = {
         "emoji": "🌍",
         "start_date": "2026-11-02T00:00:00.000Z",
         "end_date": "2026-11-07T23:59:59.000Z",
+        "knockout_start": "2026-11-05",
         "tz": "Asia/Qatar",
         "ticket_url": None,
         "where_to_watch_url": "https://www.padelfip.com/events/fip-world-cup-2026-2/",
@@ -459,7 +460,7 @@ FIP_IOC_TO_ISO2 = {
     "SUI": "CH", "AUT": "AT", "DEN": "DK", "FIN": "FI", "IRL": "IE", "POL": "PL",
 }
 
-# Standings come with English team names ("Spain", "Uae"); show Spanish ones.
+# The widgets use English team names ("Spain", "Uae"); show Spanish ones.
 FIP_COUNTRY_ES = {
     "ARG": "Argentina", "AUS": "Australia", "BEL": "Bélgica", "BRA": "Brasil",
     "CHI": "Chile", "EGY": "Egipto", "ESP": "España", "FRA": "Francia",
@@ -626,35 +627,152 @@ def _fip_parse_day(soup: BeautifulSoup, day, tz: ZoneInfo) -> list:
     return matches
 
 
-def _fip_parse_groups(soup: BeautifulSoup) -> list:
-    draws = []
-    for draw in soup.select("[data-draw]"):
-        title_el = draw.select_one(".h4 span")
-        title = title_el.get_text(" ", strip=True) if title_el else ""
-        gender = "Femenino" if "WOMEN" in title.upper() else "Masculino" if "MEN" in title.upper() else title
-        groups = []
-        for caption in draw.select(".group-caption"):
-            body = caption.find_next_sibling(class_="group-body")
-            if not body:
-                continue
-            rows = []
-            for team_el in body.select(".group-team"):
-                line = team_el.parent
-                img = team_el.select_one("img.group-flag")
-                code = img["src"].rsplit("/", 1)[-1].split(".")[0] if img and img.get("src") else ""
-                pts = line.select_one(".group-pts")
-                rubs = line.select_one(".group-rubs")
-                rows.append({
-                    "team": FIP_COUNTRY_ES.get(code.upper(), team_el.get_text(" ", strip=True)),
-                    "flag": _fip_flag(code) if code else "",
-                    "points": pts.get_text(strip=True) if pts else "",
-                    "rubbers": rubs.get_text(" ", strip=True) if rubs else "",
+def _fip_parse_ties(soup: BeautifulSoup, day) -> list:
+    """Knockout ties from a `teamresults/<id>/<n>` page.
+
+    The widget serves another day's results when asked for a day it has nothing
+    for, so a page whose active day isn't `day` contributes no ties.
+    """
+    active = soup.select_one(".play-day-button.active .play-day-date")
+    expected = f"{day.strftime('%b').upper()} {day.day}"
+    if not active or active.get_text(" ", strip=True).upper() != expected:
+        return []
+
+    ties = []
+    for card in soup.select("div[data-view][data-draw]"):
+        draw_el = card.find(class_="bold", recursive=False)
+        title = card.select(".card-title > div")
+        flags = card.select("img.tie-flag")
+        names = card.select(".tie-team-name")
+        score = re.search(r"(\d+)\s*-\s*(\d+)", card.select_one(".card-body").get_text(" ", strip=True)) \
+            if card.select_one(".card-body") else None
+        if len(title) < 2 or len(flags) < 2 or len(names) < 2 or not score:
+            continue
+        position = re.search(r"(\d+)\s*-\s*(\d+)", title[0].get_text(" ", strip=True))
+        if not position:
+            continue  # group stage cards are labelled "Group A", not a position
+
+        codes = [f["src"].rsplit("/", 1)[-1].split(".")[0].upper() for f in flags[:2]]
+        score_a, score_b = int(score.group(1)), int(score.group(2))
+        view = card.get("data-view")
+        winner = None
+        if view == "F" and score_a != score_b:
+            winner = "a" if score_a > score_b else "b"
+        ties.append({
+            "draw": "Femenino" if "WOMEN" in (draw_el.get_text().upper() if draw_el else "") else "Masculino",
+            "pos_from": int(position.group(1)),
+            "pos_to": int(position.group(2)),
+            "round": title[1].get_text(" ", strip=True),
+            "date": day.isoformat(),
+            "status": {"F": "F", "L": "P"}.get(view),
+            "team_a": _fip_bracket_team(codes[0], names[0].get_text(" ", strip=True)),
+            "team_b": _fip_bracket_team(codes[1], names[1].get_text(" ", strip=True)),
+            "code_a": codes[0],
+            "code_b": codes[1],
+            "score_a": score_a,
+            "score_b": score_b,
+            "winner": winner,
+        })
+    return ties
+
+
+def _fip_bracket_team(code: str, name: str) -> str:
+    return f"{_fip_flag(code)} {FIP_COUNTRY_ES.get(code, name.title())}".strip()
+
+
+def _fip_round_kind(tie: dict) -> str:
+    low = tie["round"].lower()
+    if "quarter" in low:
+        return "qf"
+    if "semi" in low:
+        return "sf"
+    if "3rd" in low or "third" in low or tie["pos_from"] == 3:
+        return "third"
+    return "final"
+
+
+def _fip_pending_tie(draw: str, sf_a: dict, sf_b: dict, side: str) -> dict:
+    """The final / third-place tie before FIP publishes it, filled in as the
+    semifinals finish. `side` picks each semifinal's winner or loser."""
+    def team(sf):
+        if not sf.get("winner"):
+            return "Por definir"
+        won = sf["winner"] == "a"
+        return sf["team_a"] if won == (side == "winner") else sf["team_b"]
+
+    return {
+        "draw": draw, "status": None, "team_a": team(sf_a), "team_b": team(sf_b),
+        "score_a": None, "score_b": None, "winner": None,
+    }
+
+
+def _fip_build_bracket(ties: list) -> list:
+    """Group ties into each draw's title bracket and its placement rounds."""
+    bracket = []
+    for draw in ("Masculino", "Femenino"):
+        draw_ties = [t for t in ties if t["draw"] == draw]
+        if not draw_ties:
+            continue
+        main = [t for t in draw_ties if t["pos_from"] <= 4]
+        by_kind = {k: [t for t in main if _fip_round_kind(t) == k] for k in ("qf", "sf", "final", "third")}
+
+        final = by_kind["final"][:1]
+        third = by_kind["third"][:1]
+        if len(by_kind["sf"]) == 2:
+            final = final or [_fip_pending_tie(draw, *by_kind["sf"], "winner")]
+            third = third or [_fip_pending_tie(draw, *by_kind["sf"], "loser")]
+
+        placement = []
+        for name, low, high in (("Puestos 5–8", 5, 8), ("Puestos 9–16", 9, 16)):
+            group = [t for t in draw_ties if low <= t["pos_from"] <= high]
+            labels: dict = {}
+            for t in group:
+                label = f"{FIP_ROUND_ES.get(t['round'].lower(), t['round'])} ({t['pos_from']}–{t['pos_to']})"
+                labels.setdefault(label, []).append(t)
+            if labels:
+                placement.append({
+                    "name": name,
+                    "rounds": [{"name": k, "ties": v} for k, v in labels.items()],
                 })
-            name = caption.get_text(" ", strip=True).replace("Group", "Grupo")
-            groups.append({"name": name, "rows": rows})
-        if groups:
-            draws.append({"title": gender, "groups": groups})
-    return draws
+
+        bracket.append({
+            "title": draw,
+            "rounds": [r for r in (
+                {"name": "Cuartos", "ties": by_kind["qf"]},
+                {"name": "Semifinales", "ties": by_kind["sf"]},
+                {"name": "Final", "ties": final},
+            ) if r["ties"]],
+            "third": third[0] if third else None,
+            "placement": placement,
+        })
+    return bracket
+
+
+def _fip_tie_card(tie: dict) -> dict:
+    """A tie as an order-of-play card, for days the widget hasn't published."""
+    position = f"{tie['pos_from']}–{tie['pos_to']}"
+    started = tie["status"] is not None
+    return {
+        "match_id": None,
+        "court": f"Eliminatorias · {tie['draw']}",
+        "court_order": 0 if tie["draw"] == "Femenino" else 1,
+        "court_start": "",
+        "date": tie["date"],
+        "slot": "Hora por confirmar",
+        "slot_sort": (2, f"{tie['pos_from']:02d}"),
+        "round": f"{FIP_ROUND_ES.get(tie['round'].lower(), tie['round'])} · {position}",
+        "draw_type": tie["draw"],
+        "status": tie["status"],
+        "status_title": None,
+        "team_a": tie["team_a"],
+        "team_b": tie["team_b"],
+        "country_a": tie["code_a"],
+        "country_b": tie["code_b"],
+        "score_a": str(tie["score_a"]) if started else "",
+        "score_b": str(tie["score_b"]) if started else "",
+        "winner": tie["winner"],
+        "broadcast_url": None,
+    }
 
 
 def _fip_stream_team(name: str) -> str:
@@ -757,7 +875,7 @@ def get_fip_schedule(slug: str) -> dict:
     end = datetime.fromisoformat(ev["end_date"].replace("Z", "+00:00")).date()
     n_days = (end - start).days + 1
 
-    # One page per tournament day plus the standings; fetch them in parallel so
+    # One page per tournament day plus the knockout ties; fetch them in parallel so
     # the serverless call isn't n_days round trips long. A day that fails or
     # isn't published yet just contributes no matches.
     def fetch(path):
@@ -776,7 +894,13 @@ def get_fip_schedule(slug: str) -> dict:
             logger.warning(f"FIP event page failed: {e}")
             return None
 
-    paths = [f"oopbyday/{wid}/{i}" for i in range(1, n_days + 1)] + [f"groups/{wid}"]
+    knockout_start = datetime.fromisoformat(ev["knockout_start"]).date()
+    knockout_days = [
+        (i, start + timedelta(days=i)) for i in range(n_days)
+        if start + timedelta(days=i) >= knockout_start
+    ]
+    paths = [f"oopbyday/{wid}/{i}" for i in range(1, n_days + 1)]
+    paths += [f"teamresults/{wid}/{i + 1}" for i, _ in knockout_days]
     with ThreadPoolExecutor(max_workers=len(paths) + 1) as pool:
         event_future = pool.submit(fetch_event_page)
         pages = list(pool.map(fetch, paths))
@@ -790,6 +914,16 @@ def get_fip_schedule(slug: str) -> dict:
             continue
         for m in _fip_parse_day(page, start + timedelta(days=i), tz):
             days.setdefault(m["date"], []).append(m)
+
+    ties = []
+    for (_, day), page in zip(knockout_days, pages[n_days:]):
+        if page is not None:
+            ties.extend(_fip_parse_ties(page, day))
+
+    # A knockout day the order of play doesn't cover yet still has its ties.
+    for tie in ties:
+        if tie["date"] not in days or days[tie["date"]][0].get("match_id") is None:
+            days.setdefault(tie["date"], []).append(_fip_tie_card(tie))
 
     # Backfill days the order-of-play widget hasn't published yet from the
     # event page's streaming list. A day the widget covers is never mixed with
@@ -806,17 +940,28 @@ def get_fip_schedule(slug: str) -> dict:
             if d not in days:
                 days[d] = ms
 
+        # Tie cards carry no time; take it from the streaming list when listed.
+        times = {
+            (m["date"], m["draw_type"], frozenset((m["country_a"], m["country_b"]))): m
+            for m in stream_cards if m["court_start"]
+        }
+        for d, ms in days.items():
+            for m in ms:
+                listed = times.get((d, m.get("draw_type"), frozenset((m.get("country_a"), m.get("country_b")))))
+                if listed and m["slot"] == "Hora por confirmar":
+                    m.update(slot=listed["slot"], slot_sort=listed["slot_sort"], court_start=listed["court_start"])
+
         # The widget carries no stream links: give each widget match the link
         # of its tie (same day, same two countries) so "▶ Ver" survives once
         # the full order of play replaces the stream cards.
         links = {
-            (m["date"], frozenset((m["country_a"], m["country_b"]))): m["broadcast_url"]
+            (m["date"], m["draw_type"], frozenset((m["country_a"], m["country_b"]))): m["broadcast_url"]
             for m in stream_cards if m["country_a"] and m["country_b"] and m["broadcast_url"]
         }
         for d, ms in days.items():
             for m in ms:
                 if not m.get("broadcast_url"):
-                    m["broadcast_url"] = links.get((d, frozenset((m.get("country_a"), m.get("country_b")))))
+                    m["broadcast_url"] = links.get((d, m.get("draw_type"), frozenset((m.get("country_a"), m.get("country_b")))))
 
     for day_matches in days.values():
         # Keep FIP's own court order (Center Court, Grand Stand 1, ...) rather
@@ -832,7 +977,7 @@ def get_fip_schedule(slug: str) -> dict:
         "type": ev["category"],
         "status": None,
         "days": [{"date": d, "matches": days[d]} for d in sorted(days.keys())],
-        "standings": _fip_parse_groups(pages[-1]) if pages[-1] is not None else [],
+        "bracket": _fip_build_bracket(ties),
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
 
